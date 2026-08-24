@@ -7,6 +7,9 @@ pytest async plugin is needed.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import discord
 import pytest
 
 from spiderbot import audit
@@ -102,12 +105,143 @@ class FakeAI:
         return self.result
 
 
+class FakeTree:
+    """Just enough command tree for a cog to register a group at construction."""
+
+    def __init__(self) -> None:
+        self.added: list = []
+
+    def add_command(self, command, **kwargs) -> None:
+        self.added.append((command, kwargs))
+
+
 class FakeBot:
     def __init__(self, cfg: Config, ai: FakeAI) -> None:
         self.cfg = cfg
         self.ai = ai
         self.user = FakeUser(999, name="Spider Bot", bot=True)
         self.channels: dict = {}
+        self.tree = FakeTree()
+
+
+# -- guild-shaped fakes (roles, members, audit log, interactions) -----------
+
+
+class FakeRole:
+    """Compares by id so `role in member.roles` behaves like Discord's."""
+
+    def __init__(self, id: int = 1, name: str = "Slingy Tester") -> None:
+        self.id = id
+        self.name = name
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, FakeRole) and other.id == self.id
+
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+
+class FakeMember(FakeUser):
+    def __init__(self, id: int, name: str, guild=None, roles: tuple = ()) -> None:
+        super().__init__(id, name)
+        self.guild = guild
+        self.roles = list(roles)
+        self.role_reasons: list = []
+
+    async def add_roles(self, role, reason: str | None = None) -> None:
+        self.roles.append(role)
+        self.role_reasons.append(("add", reason))
+
+    async def remove_roles(self, role, reason: str | None = None) -> None:
+        self.roles = [r for r in self.roles if r != role]
+        self.role_reasons.append(("remove", reason))
+
+
+class FakeAuditEntry:
+    """One audit-log row: who was touched, which roles were added, when."""
+
+    def __init__(self, target, added_roles: tuple = (), created_at=None) -> None:
+        self.target = target
+        self.created_at = created_at
+        self.after = SimpleNamespace(roles=list(added_roles))
+
+
+class _FakeAuditIterator:
+    def __init__(self, entries, error) -> None:
+        self._entries = list(entries)
+        self._error = error
+        self._i = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._error is not None:
+            raise self._error
+        if self._i >= len(self._entries):
+            raise StopAsyncIteration
+        entry = self._entries[self._i]
+        self._i += 1
+        return entry
+
+
+def forbidden() -> discord.Forbidden:
+    """A real discord.Forbidden without needing an HTTP response."""
+    return discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing Access")
+
+
+class FakeGuild:
+    def __init__(
+        self,
+        id: int = 1541447750628147351,
+        members: tuple = (),
+        roles: tuple = (),
+        audit_entries: tuple = (),
+        audit_error: Exception | None = None,
+    ) -> None:
+        self.id = id
+        self.members = list(members)
+        self.roles = list(roles)
+        self.audit_calls: list = []
+        self._audit_entries = list(audit_entries)
+        self._audit_error = audit_error
+
+    def audit_logs(self, *, limit=None, action=None):
+        self.audit_calls.append((limit, action))
+        return _FakeAuditIterator(self._audit_entries, self._audit_error)
+
+
+class _FakeResponse:
+    def __init__(self) -> None:
+        self.messages: list = []
+        self.deferred = False
+
+    async def send_message(self, content=None, **kwargs) -> None:
+        self.messages.append((content, kwargs))
+
+    async def defer(self, **kwargs) -> None:
+        self.deferred = True
+
+
+class _FakeFollowup:
+    def __init__(self) -> None:
+        self.messages: list = []
+
+    async def send(self, content=None, **kwargs) -> None:
+        self.messages.append((content, kwargs))
+
+
+class FakeInteraction:
+    def __init__(self, guild, user=None) -> None:
+        self.guild = guild
+        self.user = user if user is not None else FakeUser(1, "Menno420")
+        self.response = _FakeResponse()
+        self.followup = _FakeFollowup()
+
+    @property
+    def replies(self) -> list:
+        """Everything the command said back, whichever route it used."""
+        return [c for c, _ in self.response.messages] + [c for c, _ in self.followup.messages]
 
 
 @pytest.fixture

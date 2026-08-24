@@ -9,8 +9,13 @@ the estate plan at `fleet-manager/docs/planning/2026-08-21-game-community-bot/`
 ## Status
 
 v0.1.0 live on Railway since 2026-08-24 (community funnel, tester roster, AI
-chat). Phase-0 hardening landed 2026-08-24: ruff + a pytest harness under
-`tests/` (78 tests at landing) and CI workflow `quality` running lint + tests
+chat). The closed-test clock landed 2026-08-24: `/tester count` reports where
+the cohort stands - roster, days per tester, and the projected date the
+12-testers-for-14-days bar clears - reading grant timestamps out of the guild
+audit log rather than a database, plus a #mod-log alarm the moment a tester
+loses the role or leaves the server.
+Phase-0 hardening landed 2026-08-24: ruff + a pytest harness under
+`tests/` (116 tests) and CI workflow `quality` running lint + tests
 + compileall on every push. **CI is informational only** - pushes to main
 still deploy straight to production; making `quality` a required check (and
 thus a PR flow) is an open owner call. Still deferred from the GCB Phase-0
