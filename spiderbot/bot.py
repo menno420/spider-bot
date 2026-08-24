@@ -44,6 +44,16 @@ class SpiderBot(commands.Bot):
         synced = await self.tree.sync(guild=guild)
         log.info("synced %d guild commands", len(synced))
 
+    async def on_command_error(self, ctx, error) -> None:
+        # when_mentioned makes every mention parse as a prefix command; a
+        # plain chat mention then raises CommandNotFound. That path is
+        # handled by the chat cog - silence the noise, surface the rest.
+        from discord.ext import commands as _c
+
+        if isinstance(error, _c.CommandNotFound):
+            return
+        log.error("command error: %s", error)
+
     async def on_ready(self) -> None:
         guild = self.get_guild(self.cfg.guild_id)
         if guild is None:

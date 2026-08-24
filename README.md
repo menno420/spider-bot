@@ -51,6 +51,20 @@ an extraction-ledger entry (source repo + commit + file/symbol + decision).
 No secret value ever enters this repo. `.env.example` ships names with empty
 values only.
 
+## Deployment (live since 2026-08-24)
+
+Railway project **spider-bot** (`f519761e-a71d-4f4b-8cf6-1dbce06ececf`),
+service **worker** (`a7f17dde-34f6-4ee0-89ca-785cf61aaca1`), environment
+`production`, region europe-west4, NIXPACKS build, start command
+`python -m spiderbot`, app sleeping off. Variables set: `DISCORD_TOKEN`,
+`ANTHROPIC_API_KEY`, `GUILD_ID` (names here, values only in Railway).
+
+Deploy trap, measured 2026-08-24: `serviceInstanceDeployV2` rebuilds the
+service's stored snapshot - it does NOT pull the latest commit until the
+branch is armed via `serviceConnect(input: {repo, branch: "main"})`. After
+pushing, verify the deployment's `meta.commitHash` matches HEAD; deploy
+status SUCCESS alone proves nothing about which code is running.
+
 ## Invariants
 
 1. Never Administrator; least-privilege everywhere.
