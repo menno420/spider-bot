@@ -276,6 +276,18 @@ editable.
   design-system needs building. A no-build site is far kinder to maintain.
 - **Content in markdown files** the owner can edit directly in GitHub's web UI.
 - **One small server endpoint** for the email form (below). Everything else static.
+- **Crawlable HTML with real Open Graph tags — not a client-rendered SPA.** This
+  is the one place we must NOT copy the donor: its site is hash-routed and renders
+  client-side, with a single static title and description for the entire site. Our
+  recruitment mechanism *is* someone sharing a link, so the landing page must be
+  real HTML with per-page titles and an OG image, or every share shows a blank
+  card. Reserve client-side rendering for the digest only.
+- **Never name an asset folder `static/`.** The estate's root `.gitignore` ignores
+  it; a service once referenced a `static/` mount that existed locally, was never
+  committed, and crashed on boot.
+- **Copy the safe-load seam.** The donor's `data_loader.py` (~90 lines, stdlib) is
+  the single best file to lift: a missing or corrupt data file returns a populated
+  empty shape rather than raising, so every page can rely on the keys existing.
 - **Designed so a playable web demo can drop in later** without a rebuild — see
   §9.
 
@@ -288,6 +300,13 @@ The site's most important interactive element: *"tell me when there's a slot."*
   is never in the page.
 - **No database.** Discord is the store — the same philosophy the bot already uses
   for the tester clock.
+- **Copy the form hardening stack, minus the database**: a hidden honeypot field,
+  a per-IP sliding-window rate limit, a *pure* validator (returns data and touches
+  nothing, so it is unit-testable), length caps, a control-character strip, and a
+  post-redirect-get so a refresh cannot re-file. All stdlib, all in the donor. Copy
+  its **dormant-by-default** posture too: if the destination is unconfigured, show
+  a friendly "not open yet" state, never an error. What we do NOT copy is its
+  Postgres — built for a public multi-tenant abuse surface, and never switched on.
 - The owner then invites them to the Play closed test.
 - `slingy-spider-contact@googlegroups.com` already exists and forwards to the owner
   while keeping his personal address and the member list private. Use it as the
@@ -306,6 +325,13 @@ a separate tiny public data repo        ← NOT the bot's own repo
   ▼
 site/data/digest.json  →  the Feedback page
 ```
+
+Ship a small `digest_contract.json` alongside it listing the guaranteed fields and
+a `schema_version` the bot stamps into every digest. A producer-side rename
+otherwise blanks the page silently — that exact failure is recorded in the donor,
+where a consumer treated two fields as lists when the feed shipped dicts and its
+counters quietly showed nonsense. And render an absent or unrecognised digest as an
+honest "no digest yet", never as zeroes: a fabricated number is worse than a gap.
 
 **Why a separate data repo rather than the bot's own:** giving the bot write
 access to its own source repo is an escalation we do not need, and a commit to
@@ -358,7 +384,19 @@ consent age at 16; Discord's floor is 13).
 
 ## 9. Risks and traps
 
-- **Watch paths.** Without them the daily digest redeploys the live bot. §7.3.
+- **Watch paths — measured, not theoretical.** The donor estate ran a workflow
+  that committed a refreshed data file on a schedule, with no watch filter on the
+  bot service. It rebuilt and restarted the production worker **~293 times in one
+  billing cycle**. Set watch paths, or keep the digest in a separate repo. §7.3.
+- **A red CI check can silently freeze deploys.** Railway waits for the *whole*
+  check suite. In the donor, one workflow pushing straight to a protected branch
+  turned every commit's suite red, which skipped every production deploy — the bot
+  ran on stale code for about nine hours with no error anywhere. If anything
+  automated ever commits here, land it through an auto-merging PR, never a direct
+  push.
+- **Make the digest timestamp deterministic.** Derive it from the data, not from
+  `now()`. The donor had to fix exactly this so that "no diff" reliably meant
+  "genuinely unchanged" rather than "only the wall clock moved".
 - **The bot must not hold write access to its own repo.** §7.5.
 - **Consent placed too early kills the funnel.** Both reviews. §4 Phase 3.
 - **`/panel` has still not been run.** The entire button surface is invisible to
