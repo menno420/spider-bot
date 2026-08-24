@@ -17,6 +17,7 @@ from discord.ext import commands
 
 from spiderbot import audit, presets, style
 from spiderbot.ui.forms import FeedbackModal
+from spiderbot.ui.home import build_welcome
 
 log = logging.getLogger("spiderbot.community")
 
@@ -45,13 +46,20 @@ class CommunityCog(commands.Cog):
         start_here = self.bot.channels.get("start-here")
         if general is None:
             return
-        where = start_here.mention if start_here else "#start-here"
+        where = (
+            start_here.mention if start_here else f"#{self.cfg.ch_start_here}"
+        )
+        embed, panel = build_welcome(self.bot, where)
         try:
+            # The one deliberate ping the bot is allowed (invariant 8): the
+            # greeting itself. Everything after this is AllowedMentions.none().
             await general.send(
-                f"Welcome to the web, {member.mention}! :spider_web: "
-                f"Everything you need to become a Slingy Spider tester is pinned in "
-                f"{where} - or just type `/jointest`. Questions? Ask right here.",
-                allowed_mentions=discord.AllowedMentions(users=[member]),
+                content=f"{style.WEB} Welcome to the web, {member.mention}!",
+                embed=embed,
+                view=panel,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False, roles=False, users=[member], replied_user=False
+                ),
             )
         except discord.HTTPException:
             log.exception("welcome message failed")

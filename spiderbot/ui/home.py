@@ -76,14 +76,21 @@ def build_home_embed(
 
 
 class _RouteButton(discord.ui.Button):
-    def __init__(self, route, panel: HomePanel, *, persistent: bool = False) -> None:
+    def __init__(
+        self,
+        route,
+        panel: HomePanel,
+        *,
+        persistent: bool = False,
+        prefix: str = "spiderbot:home:",
+    ) -> None:
         super().__init__(
             label=route.label,
             emoji=route.emoji,
             row=route.row,
             # A pinned panel must survive restarts, and Discord matches its
             # buttons back to the view by custom_id - so they must be stable.
-            custom_id=f"spiderbot:home:{route.key}" if persistent else None,
+            custom_id=f"{prefix}{route.key}" if persistent else None,
             style=(
                 discord.ButtonStyle.secondary
                 if route.audience >= Audience.MOD
@@ -108,17 +115,23 @@ class HomePanel(Panel):
         *,
         public: bool = False,
         persistent: bool = False,
+        routes=None,
+        prefix: str = "spiderbot:home:",
+        back=None,
     ) -> None:
         super().__init__(
             member,
             public=public,
             timeout=None if persistent else Panel.DEFAULT_TIMEOUT,
+            back=back,
         )
         self.bot = bot
         self.cfg = bot.cfg
         self.audience = audience
-        for route in visible_routes(audience):
-            self.add_item(_RouteButton(route, self, persistent=persistent))
+        for route in (visible_routes(audience) if routes is None else routes):
+            self.add_item(
+                _RouteButton(route, self, persistent=persistent, prefix=prefix)
+            )
 
     async def handle(self, key: str, interaction: discord.Interaction) -> None:
         """Dispatch one button press, re-checking authority first."""
@@ -235,19 +248,9 @@ class HomePanel(Panel):
         )
 
     async def _do_post(self, interaction: discord.Interaction) -> None:
-        picker = PresetPanel(self.bot, interaction.user)
+        embed, picker = build_preset_picker(self.bot, interaction.user)
         picker.message = await safe_followup(
-            interaction,
-            embed=style.embed(
-                title=f"{style.ANNOUNCE} Post a ready-made message",
-                description=(
-                    "Pick one below. You will see exactly what gets posted, and "
-                    "where, before anything goes out."
-                ),
-                color=style.NEUTRAL,
-            ),
-            view=picker,
-            ephemeral=True,
+            interaction, embed=embed, view=picker, ephemeral=True
         )
 
     async def _do_health(self, interaction: discord.Interaction) -> None:
@@ -282,8 +285,8 @@ class _PresetSelect(discord.ui.Select):
 class PresetPanel(Panel):
     """Choose a canned message; nothing is sent until it is previewed and confirmed."""
 
-    def __init__(self, bot, member) -> None:
-        super().__init__(member)
+    def __init__(self, bot, member, *, back=None) -> None:
+        super().__init__(member, back=back)
         self.bot = bot
         self.add_item(_PresetSelect(self))
 
@@ -302,7 +305,9 @@ class PresetPanel(Panel):
             color=style.WARNING,
         )
         embed.set_footer(text=f"{where} - {style.FOOTER_BASE}")
-        confirm = ConfirmPost(self.bot, self.author, preset)
+        confirm = ConfirmPost(
+            self.bot, self.author, preset, back=_rebuild_picker(self.bot)
+        )
         # Same message, new view: inherit the handle so the confirm step can
         # expire itself too, instead of leaving a live "Post it" button behind.
         confirm.message = self.message
@@ -313,8 +318,8 @@ class PresetPanel(Panel):
 class ConfirmPost(Panel):
     """The last step before anything reaches the server."""
 
-    def __init__(self, bot, member, preset) -> None:
-        super().__init__(member, timeout=120)
+    def __init__(self, bot, member, preset, *, back=None) -> None:
+        super().__init__(member, timeout=120, back=back)
         self.bot = bot
         self.preset = preset
 
@@ -337,7 +342,9 @@ class ConfirmPost(Panel):
         )
         if self.preset.pings_testers and role is not None:
             content = f"{role.mention} {content}"
-            mentions = discord.AllowedMentions(roles=[role])
+            mentions = discord.AllowedMentions(
+                everyone=False, roles=[role], users=False, replied_user=False
+            )
         await channel.send(content[:1900], allowed_mentions=mentions)
         await interaction.response.edit_message(
             content=f"Posted to #{self.preset.channel}.", embed=None, view=None
@@ -388,3 +395,84 @@ def build_pinned_home(bot) -> tuple[discord.Embed, HomePanel]:
         routes, Audience.EVERYONE, timeout=None, icon_url=style.avatar_url(bot)
     )
     return embed, panel
+
+
+# -- back targets ------------------------------------------------------------
+# A Back press rebuilds its parent from live state rather than restoring a
+# snapshot, so authority is re-resolved on the way back too (invariant 15).
+
+
+def _rebuild_home(bot):
+    async def rebuild(interaction):
+        return build_home(bot, interaction.user)
+
+    return rebuild
+
+
+def _rebuild_picker(bot):
+    async def rebuild(interaction):
+        return build_preset_picker(bot, interaction.user)
+
+    return rebuild
+
+
+def build_preset_picker(bot, member) -> tuple[discord.Embed, PresetPanel]:
+    """The one way to open the preset picker - Home and Back both come here."""
+    embed = style.embed(
+        title=f"{style.ANNOUNCE} Post a ready-made message",
+        description=(
+            "Pick one below. You will see exactly what gets posted, and where, "
+            "before anything goes out."
+        ),
+        color=style.NEUTRAL,
+        footer=style.panel_footer(Panel.DEFAULT_TIMEOUT),
+        icon_url=style.avatar_url(bot),
+    )
+    return embed, PresetPanel(bot, member, back=_rebuild_home(bot))
+
+
+# -- the welcome -------------------------------------------------------------
+
+WELCOME_PREFIX = "spiderbot:welcome:"
+
+
+def build_welcome_panel(bot) -> HomePanel:
+    """The one button that matters, carried by the greeting itself.
+
+    Deliberately not a copy of Home: a newcomer gets exactly one next step
+    (plan §4, Grok's sequence). It rides on the welcome message rather than
+    waiting for a pinned panel, so it works whether or not `/panel` has been
+    run - and needs no command, which is the point.
+
+    Persistent custom_ids under their own prefix so the button still works
+    after a deploy without colliding with the pinned panel's buttons.
+    """
+    return HomePanel(
+        bot,
+        None,
+        Audience.EVERYONE,
+        public=True,
+        persistent=True,
+        routes=(ROUTES_BY_KEY["join"],),
+        prefix=WELCOME_PREFIX,
+    )
+
+
+def build_welcome(bot, where: str) -> tuple[discord.Embed, HomePanel]:
+    """Greeting plus the single next step. Nothing to learn, nothing to type."""
+    join = ROUTES_BY_KEY["join"]
+    embed = style.embed(
+        title=f"{style.WEB} Welcome to the web",
+        description=(
+            "Slingy Spider is an Android game Menno is building, and it needs "
+            "testers before Google will let it launch.\n\n"
+            f"**One thing to do:** press **{join.label}** below. It takes about "
+            "three minutes, and it is the single most useful thing you can do "
+            "here.\n\n"
+            f"Everything else lives in {where}. Questions? Just ask in this "
+            "channel - a human reads it."
+        ),
+        color=style.BRAND,
+        icon_url=style.avatar_url(bot),
+    )
+    return embed, build_welcome_panel(bot)

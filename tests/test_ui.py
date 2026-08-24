@@ -27,7 +27,7 @@ from conftest import (
 
 from spiderbot import presets
 from spiderbot.ai.gateway import AIResult
-from spiderbot.ui.base import BUTTONS_PER_ROW, Panel
+from spiderbot.ui.base import BUTTONS_PER_ROW, BackButton, Panel
 from spiderbot.ui.forms import AskModal, BugReportModal, FeedbackModal
 from spiderbot.ui.home import (
     ConfirmPost,
@@ -36,6 +36,8 @@ from spiderbot.ui.home import (
     build_home,
     build_home_embed,
     build_pinned_home,
+    build_preset_picker,
+    build_welcome_panel,
     health_lines,
 )
 from spiderbot.ui.routes import (
@@ -429,3 +431,113 @@ def test_an_unbindable_panel_still_works():
     assert picker.message is None
     asyncio.run(picker.on_timeout())  # must not raise
     assert all(item.disabled for item in picker.children)
+
+
+# -- back-navigation (Phase 1) -----------------------------------------------
+# Back is a *rebuild*, never a replayed snapshot: the parent is reconstructed
+# from live Discord state when the button is pressed, so authority is
+# re-resolved on the way back too.
+
+
+def _back_of(panel):
+    return next(c for c in panel.children if isinstance(c, BackButton))
+
+
+def test_the_preset_picker_offers_a_way_back():
+    _embed, picker = build_preset_picker(build(), member(mod=True))
+    assert any(isinstance(c, BackButton) for c in picker.children)
+
+
+def test_back_rebuilds_home_in_place():
+    bot = build()
+    who = member(mod=True)
+    _embed, picker = build_preset_picker(bot, who)
+    picker.message = FakeMessageHandle()
+    interaction = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(_back_of(picker).callback(interaction))
+
+    edit = interaction.response.edits[0]
+    assert isinstance(edit["view"], HomePanel)
+    assert "Test status" in edit["embed"].description
+    assert edit["view"].message is picker.message, "the rebuilt panel keeps the handle"
+
+
+def test_back_re_resolves_authority_for_whoever_presses_it():
+    # The picker was opened by a mod. A plain member pressing Back must get a
+    # member's Home - rendering is not authorisation, and neither is history.
+    bot = build()
+    _embed, picker = build_preset_picker(bot, member(mod=True))
+    interaction = FakeInteraction(FakeGuild(), user=member(name="Alice", id=8))
+    asyncio.run(_back_of(picker).callback(interaction))
+    description = interaction.response.edits[0]["embed"].description
+    assert "Test status" not in description
+    assert "How do I join?" in description
+
+
+def test_the_confirm_step_goes_back_to_the_picker_not_all_the_way_home():
+    bot = build()
+    who = member(mod=True)
+    _embed, picker = build_preset_picker(bot, who)
+    first = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(picker.preview(first, "recruit"))
+
+    confirm = first.response.edits[0]["view"]
+    second = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(_back_of(confirm).callback(second))
+    assert isinstance(second.response.edits[0]["view"], PresetPanel)
+
+
+def test_an_expired_panel_says_so_rather_than_only_greying_out():
+    bot = build()
+    who = member(mod=True)
+    interaction = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(panel_for(bot, who).handle("post", interaction))
+    picker = interaction.response.messages[0][1]["view"]
+    asyncio.run(picker.on_timeout())
+    assert "expired" in picker.message.edits[0]["content"].lower()
+    assert all(item.disabled for item in picker.children)
+
+
+# -- the plan's structural guards --------------------------------------------
+
+
+def test_every_route_is_one_click_from_home():
+    bot = build()
+    for who in (member(), member(mod=True)):
+        labels = {getattr(b, "label", None) for b in panel_for(bot, who).children}
+        for route in visible_routes(audience_for(who, bot.cfg)):
+            assert route.label in labels, f"{route.key} is more than one click away"
+
+
+def test_no_panel_is_instruction_only():
+    # superbot fails its own CI on a panel that shows text and offers no way to
+    # act. Back does not count as an action - it only undoes one.
+    bot = build()
+    who = member(mod=True)
+    panels = [
+        panel_for(bot, who),
+        panel_for(bot, member()),
+        build_preset_picker(bot, who)[1],
+        ConfirmPost(bot, who, presets.PRESETS[0]),
+        build_pinned_home(bot)[1],
+        build_welcome_panel(bot),
+    ]
+    for panel in panels:
+        real = [c for c in panel.children if not isinstance(c, BackButton)]
+        assert real, f"{type(panel).__name__} shows no action"
+
+
+def test_no_sub_panel_is_a_dead_end():
+    bot = build()
+    who = member(mod=True)
+    _embed, picker = build_preset_picker(bot, who)
+    interaction = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(picker.preview(interaction, "recruit"))
+    confirm = interaction.response.edits[0]["view"]
+    for panel in (picker, confirm):
+        assert any(isinstance(c, BackButton) for c in panel.children), type(panel).__name__
+
+
+def test_home_itself_has_no_back_button():
+    # Home is the root. A Back there would go nowhere.
+    assert not any(isinstance(c, BackButton) for c in panel_for(build(), member()).children)

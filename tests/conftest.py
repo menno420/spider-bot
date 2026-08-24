@@ -43,6 +43,10 @@ class FakeUser:
         self.bot = bot
         self.roles: list = []
 
+    @property
+    def mention(self) -> str:
+        return f"<@{self.id}>"
+
     def __str__(self) -> str:
         return self.display_name
 
@@ -60,6 +64,10 @@ class FakeChannel:
         self.id = id
         self.name = name
         self.sent: list = []
+
+    @property
+    def mention(self) -> str:
+        return f"<#{self.id}>"
 
     def typing(self) -> _NullTyping:
         return _NullTyping()

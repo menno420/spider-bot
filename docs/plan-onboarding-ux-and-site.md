@@ -97,9 +97,18 @@ ones are user-visible today.
    Port `safe_defer` / `safe_edit` / `safe_followup` / `clamp_embed` (~150 lines,
    no dependencies) before that, not after.
 
-### Phase 1 — onboarding and the visual system
+### Phase 1 — onboarding and the visual system — **shipped 2026-08-25**
 
-This is the phase the owner named as the focus.
+This is the phase the owner named as the focus. Everything below is built
+except the one item marked *(Owner action)*.
+
+*One design decision made while implementing, worth recording:* the welcome
+carries **its own single button** rather than pointing at the pinned `/panel`.
+Pointing at a pinned panel that has not been posted yet would have made the
+greeting's one next step a dead reference — and `/panel` is an owner action
+still outstanding (see §9). The button rides on the greeting itself, with its
+own `spiderbot:welcome:` custom-id prefix so it survives deploys without
+colliding with the pinned panel's buttons.
 
 - **Back-navigation.** Port `attach_back_button` + `carry_back` + `chain_back` and
   auto-attach in `Panel.__init__`. ~180 lines, no database, no state. Back-nav is
@@ -118,6 +127,16 @@ This is the phase the owner named as the focus.
 - **The visual system** (§5) applied everywhere, plus the guard tests:
   every route reachable in ≤2 clicks; every panel exposes at least one real
   action (superbot fails CI on `instruction_only` panels); no dead ends.
+  Landed as `spiderbot/style.py` — below `ui/`, not inside it, because
+  `presets.py` and `cogs/` need the same palette (CLAUDE.md invariant 13).
+  `tests/test_style.py` enforces the locked hex values, bans stock
+  `discord.Color.*` anywhere in `spiderbot/`, and rejects any emoji outside the
+  vocabulary on a route, a preset or a shipped embed.
+
+**Emoji substitutions this forced**, since the §5 set is closed and four
+surfaces used glyphs outside it: bug report `🐞` → `🐛` (the set's own),
+stay-opted-in `⏰` → `📊` (it is the clock preset), new-build `🚀` → `📢`,
+thanks `🎉` and recruit `👤` → `🕷️` and `🕸️`.
 
 ### Phase 2 — the companion site
 

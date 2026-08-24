@@ -47,6 +47,22 @@ structural change - that plan outranks preferences you arrive with.
 16. **Nothing reaches the server unpreviewed.** Preset posting shows the exact
     text and destination, then requires a confirm press.
 
+17. **Colour and emoji come from `spiderbot/style.py`.** No stock
+    `discord.Color.*` anywhere, and nothing outside the eleven-emoji locked
+    vocabulary on a public surface. Colour is semantic: orange means "needs
+    your attention" and nothing else, and the AI never speaks without the
+    purple accent and the speech balloon. `tests/test_style.py` enforces it.
+18. **Back rebuilds, never replays.** A Back button reconstructs its parent
+    from live Discord state at click time, so authority is re-resolved on the
+    way back too. Restoring a captured snapshot would hand someone the panel
+    they had a minute ago, which is invariant 15 through the back door.
+19. **The two deliberate pings are spelled out at the call site.**
+    `AllowedMentions` leaves unset fields as a sentinel that reads as True;
+    they resolve to False only via the client-wide default. The welcome ping
+    and `ping_testers` state `everyone=False, roles=..., users=...,
+    replied_user=False` explicitly rather than inheriting narrowness from
+    another file.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

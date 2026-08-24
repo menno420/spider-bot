@@ -46,9 +46,12 @@ class SpiderBot(commands.Bot):
             await self.load_extension(ext)
         # Re-attach the pinned Home panel: Discord matches its buttons back
         # by custom_id, so without this a pinned panel dies on every deploy.
-        from spiderbot.ui.home import build_pinned_home
+        from spiderbot.ui.home import build_pinned_home, build_welcome_panel
 
         self.add_view(build_pinned_home(self)[1])
+        # Same reason for the welcome's single button: without this, every
+        # greeting posted before the last deploy becomes a dead button.
+        self.add_view(build_welcome_panel(self))
         guild = discord.Object(id=self.cfg.guild_id)
         self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)

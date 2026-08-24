@@ -82,6 +82,34 @@ async def bind_message(panel: Panel, interaction: discord.Interaction) -> None:
         log.debug("%s could not bind its message: %s", type(panel).__name__, exc)
 
 
+class BackButton(discord.ui.Button):
+    """One step back, rebuilt at click time - never a replayed snapshot.
+
+    `rebuild` is an async callable taking the interaction and returning the
+    parent's `(embed, panel)`. Rebuilding rather than restoring is what keeps
+    a Back press honest: the parent re-resolves the presser's standing from
+    live Discord state, so going back can never hand someone a panel built
+    for the authority they had a minute ago.
+
+    No emoji: the locked vocabulary has no back arrow, and inventing a
+    twelfth is how a closed set stops being closed.
+    """
+
+    def __init__(self, rebuild, *, row: int = 4) -> None:
+        super().__init__(label="Back", style=discord.ButtonStyle.secondary, row=row)
+        self.rebuild = rebuild
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        from spiderbot.ui.safe import safe_edit
+
+        embed, panel = await self.rebuild(interaction)
+        # Same Discord message, new view: carry the handle across so the
+        # rebuilt panel can still expire itself.
+        panel.message = getattr(self.view, "message", None)
+        await safe_edit(interaction, embed=embed, view=panel)
+        await bind_message(panel, interaction)
+
+
 class Panel(discord.ui.View):
     """Base for every Spider Bot panel.
 
@@ -90,6 +118,9 @@ class Panel(discord.ui.View):
     """
 
     DEFAULT_TIMEOUT = 180
+    EXPIRED_NOTICE = (
+        "This panel expired - open a new one with `/home`, or use the pinned panel."
+    )
 
     def __init__(
         self,
@@ -97,11 +128,16 @@ class Panel(discord.ui.View):
         *,
         public: bool = False,
         timeout: float | None = DEFAULT_TIMEOUT,
+        back=None,
     ) -> None:
         super().__init__(timeout=timeout)
         self.author = author
         self.public = public
         self.message: discord.Message | None = None
+        self.back = back
+        if back is not None:
+            # Row 4 keeps Back at the bottom whatever a subclass adds after us.
+            self.add_item(BackButton(back))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.public or self.author is None:
@@ -120,7 +156,7 @@ class Panel(discord.ui.View):
         if self.message is None:
             return
         try:
-            await self.message.edit(view=self)
+            await self.message.edit(content=self.EXPIRED_NOTICE, view=self)
         except discord.HTTPException as exc:  # message deleted, perms changed
             log.debug("%s.on_timeout could not disable: %s", type(self).__name__, exc)
 
