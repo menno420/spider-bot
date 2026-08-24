@@ -22,6 +22,8 @@ import logging
 
 import discord
 
+from spiderbot.ui.safe import safe_edit
+
 log = logging.getLogger("spiderbot.ui")
 
 # Discord renders at most five components per action row.
@@ -75,9 +77,12 @@ async def bind_message(panel: Panel, interaction: discord.Interaction) -> None:
     """
     if panel.message is not None:
         return
+    fetch = getattr(interaction, "original_response", None)
+    if fetch is None:
+        return
     try:
-        panel.message = await interaction.original_response()
-    except (discord.HTTPException, AttributeError) as exc:
+        panel.message = await fetch()
+    except discord.HTTPException as exc:
         # Best-effort: an unbound panel still works, it just cannot grey out.
         log.debug("%s could not bind its message: %s", type(panel).__name__, exc)
 
@@ -100,8 +105,6 @@ class BackButton(discord.ui.Button):
         self.rebuild = rebuild
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        from spiderbot.ui.safe import safe_edit
-
         embed, panel = await self.rebuild(interaction)
         # Same Discord message, new view: carry the handle across so the
         # rebuilt panel can still expire itself.
