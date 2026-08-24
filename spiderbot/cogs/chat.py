@@ -159,7 +159,7 @@ class ChatCog(commands.Cog):
                             "My web got tangled - I could not think of an answer just now. "
                             "Menno will see your message!",
                             allowed_mentions=discord.AllowedMentions.none(),
-                            fail_if_not_exists=False,
+                            mention_author=False,
                         )
                     except discord.HTTPException:
                         pass
@@ -168,7 +168,7 @@ class ChatCog(commands.Cog):
             await message.reply(
                 result.text,
                 allowed_mentions=discord.AllowedMentions.none(),
-                fail_if_not_exists=False,
+                mention_author=False,
             )
         except discord.HTTPException:
             log.exception("delivery failed in #%s", ch.name)
