@@ -71,6 +71,13 @@ platform breadth waits.
 venue, under that repo's protocol - it has not been done. Until it is, the plan
 outranks this file on anything it actually covers.
 
+## The build plan
+
+How we get from here to there - the phases, the locked visual system, the
+consent copy, and the companion site - lives in
+[plan-onboarding-ux-and-site.md](plan-onboarding-ux-and-site.md). That file
+is ranked against one number: 12 testers for 14 continuous days.
+
 ## Standing non-goals
 
 Administrator permission. The bot DMing anyone first. AI performing side
