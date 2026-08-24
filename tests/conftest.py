@@ -256,6 +256,21 @@ class FakePermissions:
         self.manage_roles = manage_guild
 
 
+class FakeMessageHandle:
+    """What `original_response()` returns: the handle a panel edits on timeout.
+
+    Ephemeral messages can only be edited through the interaction token, so a
+    panel that never obtains this cannot grey its own buttons out.
+    """
+
+    def __init__(self, id: int = 555) -> None:
+        self.id = id
+        self.edits: list = []
+
+    async def edit(self, **kwargs) -> None:
+        self.edits.append(kwargs)
+
+
 class FakeInteraction:
     def __init__(self, guild, user=None, channel=None) -> None:
         self.guild = guild
@@ -264,6 +279,16 @@ class FakeInteraction:
         self.channel_id = self.channel.id
         self.response = _FakeResponse()
         self.followup = _FakeFollowup()
+        self.message = None
+        self.original = FakeMessageHandle()
+
+    async def original_response(self) -> FakeMessageHandle:
+        return self.original
+
+    async def edit_original_response(self, **kwargs) -> None:
+        # Same sink as response.edit_message: both mean "the panel changed",
+        # so the `embeds`/`replies` helpers below see either route.
+        self.response.edits.append(kwargs)
 
     @property
     def embeds(self) -> list:

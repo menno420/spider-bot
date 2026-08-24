@@ -62,6 +62,26 @@ async def handle_panel_error(
         log.debug("panel error notice could not be delivered")
 
 
+async def bind_message(panel: Panel, interaction: discord.Interaction) -> None:
+    """Give a panel the message handle its own `on_timeout` needs.
+
+    Without this `on_timeout` hits `self.message is None` and returns, so the
+    buttons stay clickable forever and do nothing - a dead surface the user
+    cannot tell from a live one. `/home` bound it from the start; the panels
+    underneath it did not, which is the defect this closes.
+
+    Ephemeral messages can only be edited through the interaction token, so the
+    handle must come from `original_response()`, never `interaction.message`.
+    """
+    if panel.message is not None:
+        return
+    try:
+        panel.message = await interaction.original_response()
+    except (discord.HTTPException, AttributeError) as exc:
+        # Best-effort: an unbound panel still works, it just cannot grey out.
+        log.debug("%s could not bind its message: %s", type(panel).__name__, exc)
+
+
 class Panel(discord.ui.View):
     """Base for every Spider Bot panel.
 

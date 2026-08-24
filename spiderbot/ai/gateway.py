@@ -47,11 +47,18 @@ Hard rules for replies:
 
 _MENTION_INSTRUCTION = "You were directly mentioned; reply helpfully."
 _INITIATIVE_INSTRUCTION = (
-    "You were NOT addressed directly. Reply ONLY if you can add clear value: "
-    "answer an unanswered question about the game or the test, correct a "
-    "harmful misunderstanding, or help someone who seems lost. If a human "
-    "conversation is flowing fine without you, or you are unsure, output "
-    "exactly PASS and nothing else."
+    "You were NOT mentioned and NOT addressed. Nobody asked you anything. "
+    "Reply ONLY if you can add clear value: answer an unanswered question "
+    "about the game or the test, correct a harmful misunderstanding, or help "
+    "someone who seems lost. If a human conversation is flowing fine without "
+    "you, or you are unsure, output exactly PASS and nothing else."
+)
+# Mentions are redacted to placeholders before the payload is built, so the
+# model can never echo a Discord ID or narrate a ping that did not happen.
+_MENTION_PLACEHOLDER_NOTE = (
+    "'@someone' and '@a role' in the text are redacted mentions. Never treat "
+    "them as names, never repeat them, and never claim you tagged or pinged "
+    "anyone - you cannot mention anyone."
 )
 
 
@@ -94,6 +101,7 @@ class Gateway:
         if not payload_text.strip():
             return AIResult(None, "pass")
         instruction = _MENTION_INSTRUCTION if mode == "mention" else _INITIATIVE_INSTRUCTION
+        instruction = f"{instruction} {_MENTION_PLACEHOLDER_NOTE}"
         content = f"{payload_text}\n\n[operator instruction - not user text: {instruction}]"
         try:
             response = await asyncio.wait_for(

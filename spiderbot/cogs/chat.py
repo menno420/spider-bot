@@ -6,8 +6,9 @@ exactly one audit event.
 Pipeline gates, in order (donor's order, trimmed):
 skip empty/bot/command -> DM skip -> mention check (message.mentions, never
 mentioned_in - the @everyone false-ping bug) -> policy (allow-list) ->
-cooldown + hourly cap -> bare-mention strip -> gateway -> deliver with
-AllowedMentions.none() -> record memory -> mark cooldown ON DELIVERY -> audit.
+keyword heuristic -> addressed-to-someone-else skip -> cooldown + hourly cap ->
+mention scrub -> gateway -> deliver with AllowedMentions.none() -> record
+memory -> mark cooldown ON DELIVERY -> audit.
 """
 
 from __future__ import annotations
@@ -31,6 +32,23 @@ _KEYWORDS = re.compile(
     r"|install|apk|android|bug|crash|how do i|help|anyone know",
     re.IGNORECASE,
 )
+
+
+_MENTION_TOKEN = re.compile(r"<@[!&]?\d+>")
+
+
+def scrub_mentions(text: str) -> str:
+    """Replace every raw mention token with a neutral placeholder.
+
+    Two reasons, both from superbot's BUG-0019 #1. A raw `<@123>` reaching the
+    model lets it narrate a ping that never happened ("I've tagged Alice"),
+    and echoing numeric Discord IDs is forbidden outright by SYSTEM_SAFETY.
+    Applied to the transcript as well as the live message: memory is the
+    quieter of the two doors and carried the same tokens.
+    """
+    return _MENTION_TOKEN.sub(
+        lambda m: "@a role" if m.group(0).startswith("<@&") else "@someone", text
+    )
 
 
 class ChatCog(commands.Cog):
@@ -57,7 +75,7 @@ class ChatCog(commands.Cog):
                 message.author.display_name, f"user_{message.author.id % 997}"
             )
         )
-        self._mem(message.channel.id).append((label, message.content[:800]))
+        self._mem(message.channel.id).append((label, scrub_mentions(message.content)[:800]))
 
     def record_own(self, channel_id: int, text: str) -> None:
         self._mem(channel_id).append(("assistant", text[:800]))
@@ -76,7 +94,7 @@ class ChatCog(commands.Cog):
         )
         parts.append(
             f"Current message in #{message.channel.name} from [{author}]:"
-            + safety.wrap_untrusted(current_text, kind="current_user_message")
+            + safety.wrap_untrusted(scrub_mentions(current_text), kind="current_user_message")
         )
         return "\n\n".join(parts)
 
@@ -123,6 +141,13 @@ class ChatCog(commands.Cog):
             return  # unconfigured = silent, always
         if not _KEYWORDS.search(content):
             return  # cheap heuristic gates the API call
+        # Addressed to a human, not to us: barging in is the donor's BUG-0019
+        # #1, still open there. Audited like the other post-keyword denials so
+        # the decision is visible in the logs rather than silently missing.
+        if any(getattr(u, "id", None) != self.bot.user.id for u in message.mentions):
+            audit.stdout_event("ai_decision", decision="denied",
+                               reason="ADDRESSED_TO_OTHERS", channel=ch.name)
+            return
         now = time.time()
         if now - self._last_initiative.get(ch.id, 0.0) < cfg.initiative_cooldown_s:
             audit.stdout_event("ai_decision", decision="denied", reason="COOLDOWN_ACTIVE",

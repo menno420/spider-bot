@@ -18,7 +18,7 @@ import logging
 import discord
 
 from spiderbot import audit, cohort, presets, roster
-from spiderbot.ui.base import Panel
+from spiderbot.ui.base import Panel, bind_message
 from spiderbot.ui.forms import AskModal, BugReportModal, FeedbackModal
 from spiderbot.ui.routes import (
     ROUTES_BY_KEY,
@@ -26,6 +26,7 @@ from spiderbot.ui.routes import (
     audience_for,
     visible_routes,
 )
+from spiderbot.ui.safe import safe_edit, safe_followup
 
 log = logging.getLogger("spiderbot.ui.home")
 
@@ -212,7 +213,9 @@ class HomePanel(Panel):
         )
 
     async def _do_post(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
+        picker = PresetPanel(self.bot, interaction.user)
+        picker.message = await safe_followup(
+            interaction,
             embed=discord.Embed(
                 title="\N{PUBLIC ADDRESS LOUDSPEAKER} Post a ready-made message",
                 description=(
@@ -221,7 +224,7 @@ class HomePanel(Panel):
                 ),
                 color=discord.Color.blurple(),
             ),
-            view=PresetPanel(self.bot, interaction.user),
+            view=picker,
             ephemeral=True,
         )
 
@@ -271,9 +274,12 @@ class PresetPanel(Panel):
             color=discord.Color.orange(),
         )
         embed.set_footer(text=where)
-        await interaction.response.edit_message(
-            embed=embed, view=ConfirmPost(self.bot, self.author, preset)
-        )
+        confirm = ConfirmPost(self.bot, self.author, preset)
+        # Same message, new view: inherit the handle so the confirm step can
+        # expire itself too, instead of leaving a live "Post it" button behind.
+        confirm.message = self.message
+        await safe_edit(interaction, embed=embed, view=confirm)
+        await bind_message(confirm, interaction)
 
 
 class ConfirmPost(Panel):

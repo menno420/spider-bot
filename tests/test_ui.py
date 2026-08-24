@@ -19,7 +19,9 @@ from conftest import (
     FakeGuild,
     FakeInteraction,
     FakeMember,
+    FakeMessageHandle,
     FakeRole,
+    forbidden,
     make_cfg,
 )
 
@@ -358,3 +360,72 @@ def test_build_home_is_the_shared_factory():
     embed, view = build_home(bot, member(mod=True))
     assert isinstance(view, HomePanel)
     assert "Test status" in embed.description
+
+
+# -- panels can expire themselves (Phase 0 repair) ---------------------------
+# `on_timeout` disables the buttons and edits the message - but it returns
+# early when `message` is None. An unbound panel therefore keeps live-looking
+# buttons that do nothing, which is exactly what a member cannot distinguish
+# from a working one. /home bound it; the panels underneath it did not.
+
+
+def test_the_post_menu_binds_its_message_and_expires():
+    bot = build()
+    who = member(mod=True)
+    interaction = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(panel_for(bot, who).handle("post", interaction))
+
+    _content, kwargs = interaction.response.messages[0]
+    picker = kwargs["view"]
+    assert isinstance(picker, PresetPanel)
+    assert picker.message is not None, "unbound: on_timeout would be a no-op"
+
+    asyncio.run(picker.on_timeout())
+    assert all(item.disabled for item in picker.children)
+    assert picker.message.edits, "the timeout must actually reach Discord"
+
+
+def test_the_confirm_step_binds_its_message_and_expires():
+    bot = build()
+    who = member(mod=True)
+    picker = PresetPanel(bot, who)
+    interaction = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(picker.preview(interaction, "recruit"))
+
+    confirm = interaction.response.edits[0]["view"]
+    assert isinstance(confirm, ConfirmPost)
+    assert confirm.message is not None
+
+    asyncio.run(confirm.on_timeout())
+    assert all(item.disabled for item in confirm.children)
+    assert confirm.message.edits
+
+
+def test_the_confirm_step_reuses_the_pickers_own_message():
+    # Preview and confirm are the same Discord message with a different view,
+    # so the confirm step must inherit the handle rather than fetch a second.
+    bot = build()
+    who = member(mod=True)
+    picker = PresetPanel(bot, who)
+    picker.message = FakeMessageHandle(id=4242)
+    interaction = FakeInteraction(FakeGuild(), user=who)
+    asyncio.run(picker.preview(interaction, "recruit"))
+    assert interaction.response.edits[0]["view"].message is picker.message
+
+
+def test_an_unbindable_panel_still_works():
+    # Binding is best-effort: losing the handle must degrade to "cannot grey
+    # out", never to a raising callback.
+    bot = build()
+    who = member(mod=True)
+    interaction = FakeInteraction(FakeGuild(), user=who)
+
+    async def gone():
+        raise forbidden()  # what losing the handle actually looks like
+
+    interaction.original_response = gone
+    asyncio.run(panel_for(bot, who).handle("post", interaction))
+    picker = interaction.response.messages[0][1]["view"]
+    assert picker.message is None
+    asyncio.run(picker.on_timeout())  # must not raise
+    assert all(item.disabled for item in picker.children)

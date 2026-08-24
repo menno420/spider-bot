@@ -66,10 +66,14 @@ reach the bot, its database, or any secret."*
 
 ## 4. Phases
 
-### Phase 0 — repairs (hours)
+### Phase 0 — repairs (hours) — **shipped 2026-08-24**
 
-Three defects verified live in the current build. Do these first; they are cheap
-and two of them are user-visible today.
+Two defects verified live in the current build, plus one guard that must land
+before §5's field-based embeds. Do these first; they are cheap and both live
+ones are user-visible today.
+
+*Correction, made while implementing: this section originally called all three
+"verified live". Reading the source showed the third is not — see item 3.*
 
 1. **Dead sub-panels.** `PresetPanel` and `ConfirmPost` are sent without binding
    `view.message`, so `on_timeout` is a no-op — after three minutes the buttons
@@ -82,11 +86,16 @@ and two of them are user-visible today.
    blocking their AI feature from certification. Fix: skip when a message mentions
    another user or bot and not us; strip all mention tokens; pass explicit
    "you were not mentioned" framing.
-3. **No embed clamping.** A field over 1024 chars, or 6000 total, makes Discord
-   reject the *whole message* with a 400. Inside a panel edit the edit never lands
-   and the UI freezes with no error. superbot hit this twice in production; one
-   incident meant a panel's Back button never rendered. Port `safe_defer` /
-   `safe_edit` / `safe_followup` / `clamp_embed` (~150 lines, no dependencies).
+3. **No embed clamping** — *preventive, not a live defect.* A field over 1024
+   chars, or 6000 total, makes Discord reject the *whole message* with a 400.
+   Inside a panel edit the edit never lands and the UI freezes with no error.
+   superbot hit this twice in production; one incident meant a panel's Back
+   button never rendered. **But nothing is breaking here today:** all seven of
+   our embed sites already truncate by hand (`[:4000]`, `[:256]`) and nothing
+   calls `add_field` at all. It becomes live the moment §5's inline two-column
+   fields land, because the 1024-per-field cap is the one nobody hand-truncates.
+   Port `safe_defer` / `safe_edit` / `safe_followup` / `clamp_embed` (~150 lines,
+   no dependencies) before that, not after.
 
 ### Phase 1 — onboarding and the visual system
 

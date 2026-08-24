@@ -15,7 +15,7 @@ import discord
 from conftest import FakeAI, FakeBot, FakeChannel, FakeMessage, FakeUser, make_cfg
 
 from spiderbot.ai.gateway import AIResult
-from spiderbot.cogs.chat import ChatCog
+from spiderbot.cogs.chat import ChatCog, scrub_mentions
 
 REPLY = AIResult("Try /jointest!", "ok", model="claude-opus-5", input_tokens=9, output_tokens=3)
 KEYWORDED = "anyone know how do i install the slingy build?"
@@ -234,3 +234,71 @@ def test_own_reply_recorded_as_assistant():
     label, text = list(cog._mem(m.channel.id))[-1]
     assert label == "assistant"
     assert text == "Try /jointest!"
+
+
+# -- not barging into someone else's conversation ---------------------------
+# superbot's BUG-0019 #1, still open there and the single item blocking their
+# AI feature from certification. Two doors: the live message, and the stored
+# transcript that feeds every later reply.
+
+
+def test_scrub_mentions_neutralises_users_roles_and_nicknames():
+    assert scrub_mentions("<@1> and <@!2> and <@&3>") == "@someone and @someone and @a role"
+
+
+def test_scrub_mentions_leaves_ordinary_text_alone():
+    assert scrub_mentions("no mentions here, just <not> a token") == (
+        "no mentions here, just <not> a token"
+    )
+
+
+def test_initiative_stays_out_when_someone_else_was_addressed(audit_events):
+    cog, bot, ai = build()
+    alice = FakeUser(42, name="Alice")
+    run(cog, msg(f"<@{alice.id}> {KEYWORDED}", mentions=(alice,)))
+    assert ai.calls == [], "the question was aimed at a human"
+    denied = [e for e in audit_events if e.get("reason") == "ADDRESSED_TO_OTHERS"]
+    assert len(denied) == 1
+    assert denied[0]["decision"] == "denied"
+
+
+def test_initiative_still_fires_on_an_unaddressed_question(audit_events):
+    # The guard must not silence the case initiative exists for.
+    cog, bot, ai = build()
+    m = msg(KEYWORDED)
+    run(cog, m)
+    assert [mode for _, mode in ai.calls] == ["initiative"]
+    assert m.replies
+
+
+def test_no_raw_mention_token_reaches_the_model():
+    cog, bot, ai = build()
+    alice = FakeUser(42, name="Alice")
+    m = msg(f"<@{bot.user.id}> is <@{alice.id}> right about the apk?",
+            mentions=(bot.user, alice))
+    run(cog, m)
+    [(payload, _mode)] = ai.calls
+    assert f"<@{alice.id}>" not in payload, "a raw ID lets the model narrate a ping"
+    assert "@someone" in payload
+
+
+def test_the_transcript_is_scrubbed_too():
+    # A bystander line is recorded now and replayed into every later payload,
+    # so scrubbing only the live message would leave the tokens flowing.
+    cog, bot, ai = build()
+    alice = FakeUser(42, name="Alice")
+    ch = FakeChannel()
+    run(cog, msg(f"<@{alice.id}> nice weather", channel=ch, mentions=(alice,)))
+    [(_label, text)] = list(cog._mem(ch.id))
+    assert f"<@{alice.id}>" not in text
+    assert "@someone" in text
+
+
+def test_a_scrubbed_transcript_reaches_the_model_clean():
+    cog, bot, ai = build()
+    alice = FakeUser(42, name="Alice")
+    ch = FakeChannel()
+    run(cog, msg(f"<@{alice.id}> nice weather", channel=ch, mentions=(alice,)))
+    run(cog, msg(KEYWORDED, channel=ch))
+    [(payload, _mode)] = ai.calls
+    assert f"<@{alice.id}>" not in payload
