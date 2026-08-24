@@ -13,6 +13,7 @@ AllowedMentions.none() -> record memory -> mark cooldown ON DELIVERY -> audit.
 from __future__ import annotations
 
 import collections
+import contextlib
 import logging
 import re
 import time
@@ -154,15 +155,13 @@ class ChatCog(commands.Cog):
                     discord.Color.orange(),
                 )
                 if decision_mode == "mention":
-                    try:
+                    with contextlib.suppress(discord.HTTPException):
                         await message.reply(
                             "My web got tangled - I could not think of an answer just now. "
                             "Menno will see your message!",
                             allowed_mentions=discord.AllowedMentions.none(),
                             mention_author=False,
                         )
-                    except discord.HTTPException:
-                        pass
             return
         try:
             await message.reply(

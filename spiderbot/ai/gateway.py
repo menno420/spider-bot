@@ -109,14 +109,18 @@ class Gateway:
             text = "".join(b.text for b in response.content if b.type == "text").strip()
             usage = response.usage
             if not text or text.strip() == "PASS":
-                return AIResult(None, "pass", response.model, usage.input_tokens, usage.output_tokens)
-            return AIResult(text[:1990], "ok", response.model, usage.input_tokens, usage.output_tokens)
-        except asyncio.TimeoutError:
+                return AIResult(
+                    None, "pass", response.model, usage.input_tokens, usage.output_tokens
+                )
+            return AIResult(
+                text[:1990], "ok", response.model, usage.input_tokens, usage.output_tokens
+            )
+        except TimeoutError:
             log.warning("AI reply timed out after %ss", timeout_s)
             return AIResult(None, "timeout")
         except anthropic.APIStatusError as exc:
             log.warning("AI API error %s: %s", exc.status_code, exc.message)
             return AIResult(None, "error")
-        except Exception:  # noqa: BLE001 - gateway is the fault boundary
+        except Exception:  # the fault boundary: degrade, never raise
             log.exception("AI gateway unexpected failure")
             return AIResult(None, "error")

@@ -29,7 +29,9 @@ class TesterGroup(app_commands.Group):
     def _role(self, guild: discord.Guild) -> discord.Role | None:
         return discord.utils.get(guild.roles, name=self.bot.cfg.tester_role_name)
 
-    @app_commands.command(name="add", description="Grant the Slingy Tester role (after verifying the opt-in)")
+    @app_commands.command(
+        name="add", description="Grant the Slingy Tester role (after verifying the opt-in)"
+    )
     async def add(self, interaction: discord.Interaction, user: discord.Member) -> None:
         role = self._role(interaction.guild)
         if role is None:

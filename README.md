@@ -8,11 +8,14 @@ the estate plan at `fleet-manager/docs/planning/2026-08-21-game-community-bot/`
 
 ## Status
 
-Repo created and Discord identity provisioned on 2026-08-24. **Phase 0 of the
-GCB delivery roadmap has NOT been executed yet** (substrate bootstrap, quality
-gate, config schema, migration runner, test harness, Docker, Railway service).
-The next session in this repo starts with `delivery-roadmap.md` Phase 0 and
-registers this repo in fleet-manager `docs/ESTATE.md`.
+v0.1.0 live on Railway since 2026-08-24 (community funnel, tester roster, AI
+chat). Phase-0 hardening landed 2026-08-24: ruff + a pytest harness under
+`tests/` (78 tests at landing) and CI workflow `quality` running lint + tests
++ compileall on every push. **CI is informational only** - pushes to main
+still deploy straight to production; making `quality` a required check (and
+thus a PR flow) is an open owner call. Still deferred from the GCB Phase-0
+list until the bot needs durable state: Postgres/migrations, Docker, config
+schema. Estate registration: fleet-manager `docs/ESTATE.md`.
 
 ## Discord identity (public ids - not secrets)
 

@@ -22,7 +22,7 @@ def stdout_event(kind: str, **fields: Any) -> None:
     rec = {"ts": round(time.time(), 3), "kind": kind, **fields}
     try:
         print(json.dumps(rec, ensure_ascii=False, default=str), file=sys.stdout, flush=True)
-    except Exception:  # noqa: BLE001 - audit must never break the bot
+    except Exception:  # audit must never break the bot
         log.exception("stdout audit failed")
 
 
@@ -41,5 +41,5 @@ async def modlog_event(
             color=color or discord.Color.dark_grey(),
         )
         await channel.send(embed=embed)
-    except Exception:  # noqa: BLE001
+    except Exception:  # audit must never break the bot
         log.exception("mod-log audit failed")

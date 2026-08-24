@@ -1,0 +1,24 @@
+# Tool configuration only. Deliberately no [project]/[build-system] section:
+# Railway's NIXPACKS python provider checks requirements.txt BEFORE
+# pyproject.toml (verified in its source), so a tools-only file cannot change
+# how the worker is built or started.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "BLE", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests unpack (cog, bot, ai) fixtures whole; underscore-renaming the unused
+# slots per test hurts readability more than the rule helps.
+"tests/**" = ["RUF059"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["spiderbot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -35,10 +35,14 @@ structural change - that plan outranks preferences you arrive with.
 
 ## Verify
 
-`python -m compileall spiderbot` must pass; then run locally with the token
-from the owner's env (`DISCORD_BOT_TOKEN_SPIDERBOT`) and check the `ready`
-audit line lists the five resolved channels. Deploy = push to main (Railway
-auto-deploys the `spider-bot` service).
+`ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must
+all pass (CI job `quality` runs exactly these on every push; informational,
+not a gate). Live check: run locally with the token from the owner's env
+(`DISCORD_BOT_TOKEN_SPIDERBOT`) and check the `ready` audit line lists the
+five resolved channels - but never leave a local instance running while the
+Railway worker is up: that is two live bots answering in the real server.
+Deploy = push to main (Railway auto-deploys the `spider-bot` service; verify
+the new deployment's `meta.commitHash` equals HEAD).
 
 ## Venue rules
 

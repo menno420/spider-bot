@@ -7,6 +7,7 @@ role automatically - the roster must mirror the real Play cohort.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 
@@ -47,7 +48,9 @@ def _steps_embed(cfg) -> discord.Embed:
 
 class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
     summary = discord.ui.TextInput(
-        label="One-line summary", max_length=90, placeholder="e.g. Web-swing feels floaty on level 3"
+        label="One-line summary",
+        max_length=90,
+        placeholder="e.g. Web-swing feels floaty on level 3",
     )
     details = discord.ui.TextInput(
         label="Details",
@@ -137,10 +140,8 @@ class CommunityCog(commands.Cog):
         has_role = any(r.name == self.cfg.tester_role_name for r in getattr(member, "roles", []))
         if has_role:
             return
-        try:
+        with contextlib.suppress(discord.HTTPException):
             await message.add_reaction("\N{SPIDER}")
-        except discord.HTTPException:
-            pass
         await audit.modlog_event(
             self.bot.channels.get("mod-log"),
             "Possible new tester",

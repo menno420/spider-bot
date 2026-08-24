@@ -7,7 +7,7 @@ redacting repr, validation at import, no secret ever printed.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 def _env(name: str, default: str | None = None) -> str | None:

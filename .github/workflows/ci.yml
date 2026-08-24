@@ -1,0 +1,24 @@
+# Informational quality gate: lint + tests + compile on every push and PR.
+# It does NOT gate anything yet - pushes to main still auto-deploy to Railway.
+# Making this a required check (and thus a PR flow) is an owner decision;
+# the job name "quality" matches the roadmap's Phase-0 wording so that flip
+# is a settings-only change later.
+name: quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # matches .python-version / Railway
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: ruff check .
+      - run: python -m pytest
+      - run: python -m compileall -q spiderbot
