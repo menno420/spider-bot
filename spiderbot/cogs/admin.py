@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit
+from spiderbot import audit, style
 from spiderbot.ui.home import health_lines
 
 log = logging.getLogger("spiderbot.admin")
@@ -51,7 +51,15 @@ class AdminCog(commands.Cog):
             f"up {int((time.time() - _START) / 60)} min",
             *health_lines(self.bot),
         ]
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        await interaction.response.send_message(
+            embed=style.embed(
+                title=f"{style.GEAR} Bot health",
+                description="\n".join(lines),
+                color=style.NEUTRAL,
+                icon_url=style.avatar_url(self.bot),
+            ),
+            ephemeral=True,
+        )
 
 
 async def setup(bot) -> None:

@@ -41,6 +41,23 @@ def run(cog, message):
     asyncio.run(cog.on_message(message))
 
 
+def said(message):
+    """What the bot actually put on screen, whichever shape it used.
+
+    An AI answer ships as a purple embed (plan §5: the AI never speaks without
+    the accent and the balloon); the bot's own operational lines stay plain
+    text. Tests care about the words, not the wrapper.
+    """
+    out = []
+    for text, kwargs in message.replies:
+        if text:
+            out.append(text)
+        embed = kwargs.get("embed")
+        if embed is not None:
+            out.append(embed.description or "")
+    return "\n".join(out)
+
+
 # -- skip gates -------------------------------------------------------------
 
 
@@ -102,8 +119,7 @@ def test_initiative_happy_path_delivers_and_audits(audit_events):
     m = msg(KEYWORDED)
     run(cog, m)
     assert [mode for _, mode in ai.calls] == ["initiative"]
-    [(text, kwargs)] = m.replies
-    assert text == "Try /jointest!"
+    assert "Try /jointest!" in said(m)
     replied = [e for e in audit_events if e["kind"] == "ai_decision"]
     assert len(replied) == 1  # exactly one audit event for the decision
     assert replied[0]["decision"] == "replied"
@@ -148,7 +164,7 @@ def test_mention_replies_with_mentions_disarmed(audit_events):
     m = msg(f"<@{bot.user.id}> how do I join?", mentions=(bot.user,))
     run(cog, m)
     assert [mode for _, mode in ai.calls] == ["mention"]
-    [(text, kwargs)] = m.replies
+    [(_text, kwargs)] = m.replies
     assert kwargs["mention_author"] is False
     am = kwargs["allowed_mentions"]
     assert isinstance(am, discord.AllowedMentions)
@@ -185,8 +201,9 @@ def test_mention_error_sends_apology_and_audits_degraded(audit_events):
     cog, bot, ai = build(ai=FakeAI(AIResult(None, "error")))
     m = msg(f"<@{bot.user.id}> help", mentions=(bot.user,))
     run(cog, m)
-    [(text, kwargs)] = m.replies
-    assert "tangled" in text  # the apology, not silence
+    # The apology is the bot speaking, not the AI - plain text, no purple.
+    assert "tangled" in said(m)
+    assert m.replies[0][1].get("embed") is None
     assert audit_events[-1]["decision"] == "degraded"
 
 

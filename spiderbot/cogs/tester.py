@@ -16,7 +16,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit, cohort, roster
+from spiderbot import audit, cohort, roster, style
 
 log = logging.getLogger("spiderbot.tester")
 
@@ -57,14 +57,14 @@ class TesterGroup(app_commands.Group):
         general = self.bot.channels.get("general")
         if general is not None:
             await general.send(
-                f"\N{SPIDER} **{user.display_name}** joined the tester roster - "
+                f"{style.SPIDER} **{user.display_name}** joined the tester roster - "
                 f"that makes **{count}**! Thank you!",
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         await audit.modlog_event(
             self.bot.channels.get("mod-log"), "Tester granted",
             f"{user} granted by {interaction.user}. Roster now {count}.",
-            discord.Color.green(),
+            style.SUCCESS,
         )
         audit.stdout_event("tester_granted", user=str(user), by=str(interaction.user), count=count)
 
@@ -84,7 +84,7 @@ class TesterGroup(app_commands.Group):
         await audit.modlog_event(
             self.bot.channels.get("mod-log"), "Tester removed",
             f"{user} removed by {interaction.user}. Roster now {count}.",
-            discord.Color.orange(),
+            style.WARNING,
         )
         audit.stdout_event("tester_removed", user=str(user), by=str(interaction.user), count=count)
 
@@ -163,7 +163,7 @@ class RosterCog(commands.Cog):
             f"Google counts *continuous* opt-in, so their {cohort.WINDOW_DAYS}-day clock "
             f"restarts from zero if they come back. Run `/tester count` to see where the "
             f"cohort stands now.",
-            discord.Color.red(),
+            style.ALARM,
         )
         audit.stdout_event("tester_streak_broken", user=str(member), reason=what)
 

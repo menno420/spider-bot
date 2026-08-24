@@ -85,7 +85,9 @@ class FakeMessage:
         self.replies: list = []
         self.reactions_added: list = []
 
-    async def reply(self, text: str, **kwargs) -> None:
+    async def reply(self, text: str | None = None, **kwargs) -> None:
+        # The AI answers in a purple embed; the bot's own operational lines
+        # stay plain text. Both routes land here.
         self.replies.append((text, kwargs))
 
     async def add_reaction(self, emoji: str) -> None:

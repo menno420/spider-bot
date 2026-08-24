@@ -22,7 +22,7 @@ import time
 import discord
 from discord.ext import commands
 
-from spiderbot import audit
+from spiderbot import audit, style
 from spiderbot.ai import safety
 
 log = logging.getLogger("spiderbot.chat")
@@ -177,7 +177,7 @@ class ChatCog(commands.Cog):
                 await audit.modlog_event(
                     self.bot.channels.get("mod-log"), "AI degraded",
                     f"mode={decision_mode} in #{ch.name}: {result.reason}",
-                    discord.Color.orange(),
+                    style.WARNING,
                 )
                 if decision_mode == "mention":
                     with contextlib.suppress(discord.HTTPException):
@@ -190,7 +190,7 @@ class ChatCog(commands.Cog):
             return
         try:
             await message.reply(
-                result.text,
+                embed=style.ai_embed(result.text),
                 allowed_mentions=discord.AllowedMentions.none(),
                 mention_author=False,
             )
@@ -210,7 +210,7 @@ class ChatCog(commands.Cog):
                 self.bot.channels.get("mod-log"), "AI initiative reply",
                 f"In #{ch.name}, responding to {message.author.display_name}:\n"
                 f">>> {result.text[:900]}",
-                discord.Color.blurple(),
+                style.AI,
             )
 
 

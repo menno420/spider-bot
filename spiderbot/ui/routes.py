@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
+from spiderbot import style
 from spiderbot.ui.base import BUTTONS_PER_ROW
 
 # Discord allows five action rows on a message; Home keeps one spare for the
@@ -49,42 +50,42 @@ ROUTES: tuple[Route, ...] = (
     Route(
         key="join",
         label="How do I join?",
-        emoji="\N{SPIDER WEB}",
+        emoji=style.WEB,
         purpose="The four steps to become a tester, and the trap that catches people.",
         row=0,
     ),
     Route(
         key="optedin",
         label="I've opted in",
-        emoji="\N{WHITE HEAVY CHECK MARK}",
+        emoji=style.OK,
         purpose="Tell Menno you joined the test, so he can verify and hand you the role.",
         row=0,
     ),
     Route(
         key="feedback",
         label="Send feedback",
-        emoji="\N{SPEECH BALLOON}",
+        emoji=style.SPEECH,
         purpose="An idea, or how something feels to play.",
         row=0,
     ),
     Route(
         key="bug",
         label="Report a bug",
-        emoji="\N{LADY BEETLE}",
+        emoji=style.BUG,
         purpose="Something broken, with the details that make it fixable.",
         row=0,
     ),
     Route(
         key="ask",
         label="Ask a question",
-        emoji="\N{BLACK QUESTION MARK ORNAMENT}",
+        emoji=style.QUESTION,
         purpose="Ask Spider Bot about the game or the test.",
         row=0,
     ),
     Route(
         key="clock",
         label="Test status",
-        emoji="\N{BAR CHART}",
+        emoji=style.CHART,
         purpose="Where the closed-test clock stands: roster, days, projected finish.",
         audience=Audience.MOD,
         row=1,
@@ -92,7 +93,7 @@ ROUTES: tuple[Route, ...] = (
     Route(
         key="post",
         label="Post a message",
-        emoji="\N{PUBLIC ADDRESS LOUDSPEAKER}",
+        emoji=style.ANNOUNCE,
         purpose="Send one of the ready-made messages without typing it.",
         audience=Audience.MOD,
         row=1,
@@ -100,7 +101,7 @@ ROUTES: tuple[Route, ...] = (
     Route(
         key="health",
         label="Bot health",
-        emoji="\N{GEAR}",
+        emoji=style.GEAR,
         purpose="Version, AI state, which channels the bot resolved.",
         audience=Audience.MOD,
         row=1,

@@ -15,6 +15,8 @@ from typing import Any
 
 import discord
 
+from spiderbot import style
+
 log = logging.getLogger("spiderbot.audit")
 
 
@@ -38,7 +40,7 @@ async def modlog_event(
         embed = discord.Embed(
             title=title[:256],
             description=description[:4000],
-            color=color or discord.Color.dark_grey(),
+            color=color or style.NEUTRAL,
         )
         await channel.send(embed=embed)
     except Exception:  # audit must never break the bot

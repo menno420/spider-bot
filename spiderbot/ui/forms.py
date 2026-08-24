@@ -15,7 +15,7 @@ import logging
 
 import discord
 
-from spiderbot import audit
+from spiderbot import audit, style
 
 log = logging.getLogger("spiderbot.ui.forms")
 
@@ -40,6 +40,16 @@ async def _deliver(bot, channel_key: str, title: str, body: str, author) -> str:
             allowed_mentions=NO_MENTIONS,
         )
     return "Thank you! Your report reached the team."
+
+
+def _receipt_embed(bot, verb: str, receipt: str) -> discord.Embed:
+    """A confirmation. The title starts with a verb, never "Success!" (plan §5)."""
+    return style.embed(
+        title=f"{style.OK} {verb}",
+        description=receipt,
+        color=style.SUCCESS,
+        icon_url=style.avatar_url(bot),
+    )
 
 
 class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
@@ -67,7 +77,10 @@ class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
         receipt = await _deliver(
             self.bot, "feedback", str(self.summary.value), body, interaction.user
         )
-        await interaction.response.send_message(receipt, ephemeral=True)
+        await interaction.response.send_message(
+            embed=_receipt_embed(self.bot, "Feedback sent", receipt),
+            ephemeral=True,
+        )
         audit.stdout_event("feedback_submitted", user=str(interaction.user))
 
 
@@ -110,7 +123,10 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         receipt = await _deliver(
             self.bot, "bug-reports", str(self.summary.value), body, interaction.user
         )
-        await interaction.response.send_message(receipt, ephemeral=True)
+        await interaction.response.send_message(
+            embed=_receipt_embed(self.bot, "Bug reported", receipt),
+            ephemeral=True,
+        )
         audit.stdout_event("bug_submitted", user=str(interaction.user))
 
 
@@ -147,7 +163,9 @@ class AskModal(discord.ui.Modal, title="Ask Spider Bot"):
                 ephemeral=True,
             )
         else:
-            await interaction.followup.send(result.text[:1900], ephemeral=True)
+            await interaction.followup.send(
+                embed=style.ai_embed(result.text[:1900]), ephemeral=True
+            )
         audit.stdout_event(
             "ai_decision",
             decision="replied" if result.text else "degraded",

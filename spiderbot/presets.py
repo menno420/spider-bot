@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 import discord
 
+from spiderbot import style
+
 
 @dataclass(frozen=True)
 class Preset:
@@ -39,7 +41,7 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="join-steps",
         label="How to join the test",
-        emoji="\N{SPIDER WEB}",
+        emoji=style.WEB,
         purpose="The four join steps, with the same-account warning.",
         channel="start-here",
         body=(
@@ -52,14 +54,15 @@ PRESETS: tuple[Preset, ...] = (
             "**Step 2** - Wait about 15 minutes, then open the opt-in page signed in "
             "with that same account and tap **Become a tester**: {optin_url}\n"
             "**Step 3** - Install Slingy Spider from the Play link that page shows.\n\n"
-            "Then post \"opted in\" here and you will get the **{tester_role}** role "
-            "once your opt-in is verified."
+            "Then press **{ok} I've opted in** on the pinned Spider Bot panel "
+            "in this channel - or just say the words here - and you get the "
+            "**{tester_role}** role once Menno has verified it."
         ),
     ),
     Preset(
         key="wrong-account",
         label="Fix: app not available",
-        emoji="\N{WARNING SIGN}",
+        emoji=style.WARN,
         purpose="The wrong-account / not-propagated-yet troubleshooting answer.",
         body=(
             "**\"App not available\" or \"item not found\"?**\n\n"
@@ -76,11 +79,11 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="stay-opted-in",
         label="Reminder: stay opted in",
-        emoji="\N{ALARM CLOCK}",
+        emoji=style.CHART,
         purpose="The retention nudge - the one that protects the 14-day clock.",
         pings_testers=True,
         body=(
-            "\N{SPIDER} **Quick reminder for our testers** - the closed test needs "
+            "{spider} **Quick reminder for our testers** - the closed test needs "
             "everyone to stay opted in *continuously*, so please:\n\n"
             "- do **not** tap \"Leave the beta\"\n"
             "- do **not** leave the Google group\n"
@@ -94,12 +97,12 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="new-build",
         label="New build is live",
-        emoji="\N{ROCKET}",
+        emoji=style.ANNOUNCE,
         purpose="Tell testers an update is out and ask them to update.",
         channel="announcements",
         pings_testers=True,
         body=(
-            "\N{ROCKET} **A new Slingy Spider build is live.**\n\n"
+            "{announce} **A new Slingy Spider build is live.**\n\n"
             "Open the Play Store and update, then give it a few swings. If the "
             "update does not show yet, force-close the Play Store and reopen it - "
             "it can lag a few minutes.\n\n"
@@ -110,10 +113,10 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="bug-how-to",
         label="How to report a bug well",
-        emoji="\N{LADY BEETLE}",
+        emoji=style.BUG,
         purpose="What a useful bug report contains.",
         body=(
-            "\N{LADY BEETLE} **Reporting a bug? These four things make it fixable:**\n\n"
+            "{bug} **Reporting a bug? These four things make it fixable:**\n\n"
             "1. **What happened**, and what you expected instead\n"
             "2. **Your device and Android version** (Settings, About phone)\n"
             "3. **What you did just before it** - the smaller the steps, the better\n"
@@ -124,10 +127,10 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="thanks-progress",
         label="Thanks + progress update",
-        emoji="\N{PARTY POPPER}",
+        emoji=style.SPIDER,
         purpose="Warm check-in that keeps the cohort engaged.",
         body=(
-            "\N{PARTY POPPER} **Thank you, testers.**\n\n"
+            "{spider} **Thank you, testers.**\n\n"
             "Every day you stay opted in moves Slingy Spider closer to launch - "
             "the requirement is a full group of testers opted in for 14 days "
             "straight, so this is genuinely a team effort.\n\n"
@@ -138,10 +141,10 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="recruit",
         label="Recruit more testers",
-        emoji="\N{BUST IN SILHOUETTE}",
+        emoji=style.WEB,
         purpose="Ask the server to bring a friend into the test.",
         body=(
-            "\N{BUST IN SILHOUETTE} **Know someone with an Android phone?**\n\n"
+            "{web} **Know someone with an Android phone?**\n\n"
             "Slingy Spider needs a few more testers before it can launch, and "
             "signing up takes about three minutes. Send them here - the steps are "
             "pinned in #start-here, or they can type `/home` and press "
@@ -161,13 +164,18 @@ def render(preset: Preset, cfg) -> str:
         group_url=cfg.group_url,
         optin_url=cfg.optin_url,
         tester_role=cfg.tester_role_name,
+        ok=style.OK,
+        spider=style.SPIDER,
+        web=style.WEB,
+        bug=style.BUG,
+        announce=style.ANNOUNCE,
     )
 
 
-def steps_embed(cfg) -> discord.Embed:
+def steps_embed(cfg, *, icon_url: str | None = None) -> discord.Embed:
     """The join steps as an embed (the richer form used by /jointest and Home)."""
-    e = discord.Embed(
-        title="Become a Slingy Spider tester",
+    return style.embed(
+        title=f"{style.WEB} Become a Slingy Spider tester",
         description=(
             "Four steps, ~3 minutes. **Use the same Google account everywhere** - "
             "a different account is the #1 reason joining silently fails.\n\n"
@@ -177,13 +185,14 @@ def steps_embed(cfg) -> discord.Embed:
             "**Step 2** - Wait ~15 minutes, then open the opt-in page signed into "
             f"that same account and tap **Become a tester**: [opt-in page]({cfg.optin_url})\n"
             "**Step 3** - Install Slingy Spider from the Play link the page shows.\n\n"
-            f"Then post *\"opted in\"* in #{cfg.ch_general} and Menno will give you "
-            "the **Slingy Tester** role once your opt-in is verified.\n\n"
+            f"Then press **{style.OK} I've opted in** on the Spider Bot panel "
+            f"- or say so in #{cfg.ch_general} - and Menno gives you the "
+            f"**{cfg.tester_role_name}** role once he has verified it.\n\n"
             "*Trouble? \"App not available\" almost always means the wrong Google "
             "account, or the group join has not caught up yet - wait an hour and "
             "retry with the Step-0 account.*"
         ),
-        color=discord.Color.green(),
+        color=style.BRAND,
+        footer="Stay opted in for the full 14 days - it protects everyone's progress.",
+        icon_url=icon_url,
     )
-    e.set_footer(text="Stay opted in for the full 14 days - it protects everyone's progress.")
-    return e

@@ -15,7 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit, presets
+from spiderbot import audit, presets, style
 from spiderbot.ui.forms import FeedbackModal
 
 log = logging.getLogger("spiderbot.community")
@@ -79,7 +79,7 @@ class CommunityCog(commands.Cog):
             f"{member.display_name} said \"opted in\" in #{self.cfg.ch_general}.\n"
             f"Verify the opted-in count moved in Play Console, then run "
             f"`/tester add` with user `{member.display_name}`.",
-            discord.Color.green(),
+            style.WARNING,
         )
         audit.stdout_event("opted_in_claim", user=str(member))
 

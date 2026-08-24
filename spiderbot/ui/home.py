@@ -17,7 +17,7 @@ import logging
 
 import discord
 
-from spiderbot import audit, cohort, presets, roster
+from spiderbot import audit, cohort, presets, roster, style
 from spiderbot.ui.base import Panel, bind_message
 from spiderbot.ui.forms import AskModal, BugReportModal, FeedbackModal
 from spiderbot.ui.routes import (
@@ -30,7 +30,6 @@ from spiderbot.ui.safe import safe_edit, safe_followup
 
 log = logging.getLogger("spiderbot.ui.home")
 
-SPIDER = "\N{SPIDER}"
 NO_MENTIONS = discord.AllowedMentions.none()
 
 
@@ -49,7 +48,13 @@ def health_lines(bot) -> list[str]:
     ]
 
 
-def build_home_embed(routes, audience: Audience) -> discord.Embed:
+def build_home_embed(
+    routes,
+    audience: Audience,
+    *,
+    timeout: float | None = Panel.DEFAULT_TIMEOUT,
+    icon_url: str | None = None,
+) -> discord.Embed:
     """Describe exactly the buttons this viewer can see - generated, never typed."""
     intro = (
         "Everything Spider Bot can do, one press away."
@@ -61,12 +66,13 @@ def build_home_embed(routes, audience: Audience) -> discord.Embed:
     if audience >= Audience.MOD:
         lines.append("")
         lines.append("*The bottom row is staff-only; members do not see it.*")
-    embed = discord.Embed(
-        title=f"{SPIDER} Spider Bot",
+    return style.embed(
+        title=f"{style.SPIDER} Spider Bot",
         description="\n".join(lines),
-        color=discord.Color.green(),
+        color=style.BRAND,
+        footer=style.panel_footer(timeout),
+        icon_url=icon_url,
     )
-    return embed
 
 
 class _RouteButton(discord.ui.Button):
@@ -140,7 +146,8 @@ class HomePanel(Panel):
 
     async def _do_join(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            embed=presets.steps_embed(self.cfg), ephemeral=True
+            embed=presets.steps_embed(self.cfg, icon_url=style.avatar_url(self.bot)),
+            ephemeral=True,
         )
         audit.stdout_event("jointest_used", user=str(interaction.user), via="home")
 
@@ -158,9 +165,16 @@ class HomePanel(Panel):
             )
             return
         await interaction.response.send_message(
-            "Noted - thank you! Menno checks the opt-in list in Play Console and "
-            "hands out the tester role by hand, so it may take a little while. "
-            "Keep the game installed in the meantime.",
+            embed=style.embed(
+                title=f"{style.OK} Noted - Menno will verify it",
+                description=(
+                    "Thank you! Menno checks the opt-in list in Play Console and "
+                    "hands out the tester role by hand, so it may take a little "
+                    "while. Keep the game installed in the meantime."
+                ),
+                color=style.SUCCESS,
+                icon_url=style.avatar_url(self.bot),
+            ),
             ephemeral=True,
         )
         await audit.modlog_event(
@@ -169,7 +183,7 @@ class HomePanel(Panel):
             f"{member.display_name} pressed **I've opted in** on the Home panel.\n"
             f"Verify the opted-in count moved in Play Console, then run "
             f"`/tester add` with user `{member.display_name}`.",
-            discord.Color.green(),
+            style.WARNING,
         )
         audit.stdout_event("opted_in_claim", user=str(member), via="home")
 
@@ -206,7 +220,15 @@ class HomePanel(Panel):
                 "*Grant dates unavailable: the bot cannot read this audit log. "
                 "Give it **View Audit Log** to see day counts.*"
             )
-        await interaction.followup.send("\n".join(lines)[:1990], ephemeral=True)
+        await interaction.followup.send(
+            embed=style.embed(
+                title=f"{style.CHART} Closed-test status",
+                description="\n".join(lines)[:3900],
+                color=style.NEUTRAL,
+                icon_url=style.avatar_url(self.bot),
+            ),
+            ephemeral=True,
+        )
         audit.stdout_event(
             "cohort_reported", by=str(interaction.user), roster=status.roster,
             qualified=status.qualified, unknown=status.unknown_dates, via="home",
@@ -216,13 +238,13 @@ class HomePanel(Panel):
         picker = PresetPanel(self.bot, interaction.user)
         picker.message = await safe_followup(
             interaction,
-            embed=discord.Embed(
-                title="\N{PUBLIC ADDRESS LOUDSPEAKER} Post a ready-made message",
+            embed=style.embed(
+                title=f"{style.ANNOUNCE} Post a ready-made message",
                 description=(
                     "Pick one below. You will see exactly what gets posted, and "
                     "where, before anything goes out."
                 ),
-                color=discord.Color.blurple(),
+                color=style.NEUTRAL,
             ),
             view=picker,
             ephemeral=True,
@@ -230,7 +252,13 @@ class HomePanel(Panel):
 
     async def _do_health(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            "\n".join(health_lines(self.bot)), ephemeral=True
+            embed=style.embed(
+                title=f"{style.GEAR} Bot health",
+                description="\n".join(health_lines(self.bot)),
+                color=style.NEUTRAL,
+                icon_url=style.avatar_url(self.bot),
+            ),
+            ephemeral=True,
         )
 
 
@@ -268,12 +296,12 @@ class PresetPanel(Panel):
         where = f"Posts to #{preset.channel}"
         if preset.pings_testers:
             where += f" and pings @{self.bot.cfg.tester_role_name}"
-        embed = discord.Embed(
-            title=f"Preview - {preset.label}",
+        embed = style.embed(
+            title=f"{style.ANNOUNCE} Preview - {preset.label}",
             description=text[:4000],
-            color=discord.Color.orange(),
+            color=style.WARNING,
         )
-        embed.set_footer(text=where)
+        embed.set_footer(text=f"{where} - {style.FOOTER_BASE}")
         confirm = ConfirmPost(self.bot, self.author, preset)
         # Same message, new view: inherit the handle so the confirm step can
         # expire itself too, instead of leaving a live "Post it" button behind.
@@ -320,7 +348,7 @@ class ConfirmPost(Panel):
             f"**{self.preset.label}** posted to #{self.preset.channel} by "
             f"{interaction.user.display_name}"
             + (" (testers pinged)" if self.preset.pings_testers else ""),
-            discord.Color.blurple(),
+            style.SUCCESS,
         )
         audit.stdout_event(
             "preset_posted", preset=self.preset.key, by=str(interaction.user),
@@ -338,7 +366,11 @@ def build_home(bot, member, *, public: bool = False) -> tuple[discord.Embed, Hom
     """The single way to open Home. Every entry point goes through here."""
     audience = audience_for(member, bot.cfg)
     routes = visible_routes(audience)
-    return build_home_embed(routes, audience), HomePanel(bot, member, audience, public=public)
+    panel = HomePanel(bot, member, audience, public=public)
+    embed = build_home_embed(
+        routes, audience, timeout=panel.timeout, icon_url=style.avatar_url(bot)
+    )
+    return embed, panel
 
 
 def build_pinned_home(bot) -> tuple[discord.Embed, HomePanel]:
@@ -352,4 +384,7 @@ def build_pinned_home(bot) -> tuple[discord.Embed, HomePanel]:
     panel = HomePanel(
         bot, None, Audience.EVERYONE, public=True, persistent=True
     )
-    return build_home_embed(routes, Audience.EVERYONE), panel
+    embed = build_home_embed(
+        routes, Audience.EVERYONE, timeout=None, icon_url=style.avatar_url(bot)
+    )
+    return embed, panel
