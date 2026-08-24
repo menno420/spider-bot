@@ -15,81 +15,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit
+from spiderbot import audit, presets
+from spiderbot.ui.forms import FeedbackModal
 
 log = logging.getLogger("spiderbot.community")
 
 _OPTED_IN = re.compile(r"\bopt(?:ed)?[ -]?in\b", re.IGNORECASE)
-
-
-def _steps_embed(cfg) -> discord.Embed:
-    e = discord.Embed(
-        title="Become a Slingy Spider tester",
-        description=(
-            "Four steps, ~3 minutes. **Use the same Google account everywhere** - "
-            "a different account is the #1 reason joining silently fails.\n\n"
-            "**Step 0** - Check which Google account your phone's Play Store uses: "
-            "Play Store -> your profile picture (top right).\n"
-            f"**Step 1** - [Join the tester group]({cfg.group_url}) - click *Join group*.\n"
-            "**Step 2** - Wait ~15 minutes, then open the opt-in page signed into "
-            f"that same account and tap **Become a tester**: [opt-in page]({cfg.optin_url})\n"
-            "**Step 3** - Install Slingy Spider from the Play link the page shows.\n\n"
-            f"Then post *\"opted in\"* in #{cfg.ch_general} and Menno will give you "
-            "the **Slingy Tester** role once your opt-in is verified.\n\n"
-            "*Trouble? \"App not available\" almost always means the wrong Google "
-            "account, or the group join has not caught up yet - wait an hour and "
-            "retry with the Step-0 account.*"
-        ),
-        color=discord.Color.green(),
-    )
-    e.set_footer(text="Stay opted in for the full 14 days - it protects everyone's progress.")
-    return e
-
-
-class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
-    summary = discord.ui.TextInput(
-        label="One-line summary",
-        max_length=90,
-        placeholder="e.g. Web-swing feels floaty on level 3",
-    )
-    details = discord.ui.TextInput(
-        label="Details",
-        style=discord.TextStyle.paragraph,
-        max_length=1500,
-        placeholder="What happened / what you expected / device and Android version if relevant",
-    )
-
-    def __init__(self, bot) -> None:
-        super().__init__()
-        self.bot = bot
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        forum = self.bot.channels.get("feedback")
-        body = (
-            f"{self.details.value}\n\n*Submitted by {interaction.user.display_name} "
-            f"via /feedback*"
-        )
-        if isinstance(forum, discord.ForumChannel):
-            thread = await forum.create_thread(
-                name=str(self.summary.value)[:95],
-                content=body[:1900],
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            await interaction.response.send_message(
-                f"Thank you! Your feedback is posted: {thread.thread.mention}", ephemeral=True
-            )
-        else:  # degrade: feedback channel missing or not a forum
-            target = self.bot.channels.get("mod-log")
-            if target is not None:
-                await target.send(
-                    f"Feedback from {interaction.user.display_name}: "
-                    f"**{self.summary.value}**\n{body}"[:1900],
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            await interaction.response.send_message(
-                "Thank you! Your feedback reached the team.", ephemeral=True
-            )
-        audit.stdout_event("feedback_submitted", user=str(interaction.user))
 
 
 class CommunityCog(commands.Cog):
@@ -99,7 +30,7 @@ class CommunityCog(commands.Cog):
 
     @app_commands.command(name="jointest", description="How to join the Slingy Spider closed test")
     async def jointest(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(embed=_steps_embed(self.cfg), ephemeral=True)
+        await interaction.response.send_message(embed=presets.steps_embed(self.cfg), ephemeral=True)
         audit.stdout_event("jointest_used", user=str(interaction.user))
 
     @app_commands.command(name="feedback", description="Send feedback about Slingy Spider")

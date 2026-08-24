@@ -22,6 +22,27 @@ thus a PR flow) is an open owner call. Still deferred from the GCB Phase-0
 list until the bot needs durable state: Postgres/migrations, Docker, config
 schema. Estate registration: fleet-manager `docs/ESTATE.md`.
 
+## The app surface
+
+Spider Bot is button-driven: `/home` opens a panel with everything the presser
+is allowed to do, and `/panel` posts a permanent public one (pin it in
+#start-here) so a new arrival needs no command at all. The panel survives
+deploys - its buttons carry stable `custom_id`s and `setup_hook` re-registers
+the view.
+
+- `spiderbot/ui/routes.py` - the route registry. One frozen `Route` per
+  surface with an audience floor; Home renders from it and boot validates it.
+  **Adding a feature = adding a `Route` + a `_do_<key>` handler.**
+- `spiderbot/ui/base.py` - the panel lifecycle (invoker lock, disable on
+  timeout, standard error handling).
+- `spiderbot/ui/home.py` - the Home panel, the preset picker, preview/confirm.
+- `spiderbot/ui/forms.py` - the modals (feedback, bug report, ask the AI).
+- `spiderbot/presets.py` - ready-made messages the owner posts in one click,
+  so running the test needs no typing.
+
+Layering is one-directional: `cogs -> ui -> (presets, roster, cohort, config)`.
+The UI layer never imports a cog.
+
 ## Discord identity (public ids - not secrets)
 
 - Application: **Spider Bot**, app id `1541449715932205187`

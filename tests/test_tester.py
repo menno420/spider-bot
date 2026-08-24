@@ -24,7 +24,8 @@ from conftest import (
     make_cfg,
 )
 
-from spiderbot.cogs.tester import RosterCog, cohort_status, grant_dates
+from spiderbot.cogs.tester import RosterCog
+from spiderbot.roster import cohort_status, grant_dates
 
 TESTER = FakeRole(1, "Slingy Tester")
 OTHER = FakeRole(2, "Server Booster")

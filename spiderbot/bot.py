@@ -10,6 +10,7 @@ from discord.ext import commands
 
 from spiderbot import audit
 from spiderbot.ai.gateway import Gateway
+from spiderbot.ui import routes
 
 log = logging.getLogger("spiderbot")
 
@@ -18,6 +19,7 @@ _EXTENSIONS = (
     "spiderbot.cogs.tester",
     "spiderbot.cogs.admin",
     "spiderbot.cogs.chat",
+    "spiderbot.cogs.home",
 )
 
 
@@ -37,8 +39,16 @@ class SpiderBot(commands.Bot):
         self.channels: dict[str, discord.abc.GuildChannel] = {}
 
     async def setup_hook(self) -> None:
+        problems = routes.validate()
+        for problem in problems:  # a bad registry degrades, never blocks boot
+            log.error("route registry: %s", problem)
         for ext in _EXTENSIONS:
             await self.load_extension(ext)
+        # Re-attach the pinned Home panel: Discord matches its buttons back
+        # by custom_id, so without this a pinned panel dies on every deploy.
+        from spiderbot.ui.home import build_pinned_home
+
+        self.add_view(build_pinned_home(self)[1])
         guild = discord.Object(id=self.cfg.guild_id)
         self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)
@@ -64,6 +74,7 @@ class SpiderBot(commands.Bot):
             self.cfg.ch_general,
             self.cfg.ch_mod_log,
             self.cfg.ch_feedback,
+            self.cfg.ch_bug_reports,
             self.cfg.ch_announcements,
         }
         for ch in guild.channels:

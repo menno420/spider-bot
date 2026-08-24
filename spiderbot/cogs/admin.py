@@ -9,7 +9,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import __version__, audit
+from spiderbot import audit
+from spiderbot.ui.home import health_lines
 
 log = logging.getLogger("spiderbot.admin")
 _START = time.time()
@@ -46,15 +47,9 @@ class AdminCog(commands.Cog):
     @app_commands.command(name="status", description="Spider Bot health and configuration")
     @app_commands.default_permissions(manage_guild=True)
     async def status(self, interaction: discord.Interaction) -> None:
-        cfg = self.cfg
-        uptime_min = int((time.time() - _START) / 60)
-        ai = "on" if self.bot.ai.enabled else "OFF (no key or AI_ENABLED=false)"
         lines = [
-            f"Spider Bot v{__version__} - up {uptime_min} min",
-            f"AI: {ai} | model `{cfg.ai_model}` | effort `{cfg.ai_effort}`",
-            f"Initiative channels: {', '.join(cfg.initiative_channels) or '(none)'} "
-            f"| cooldown {cfg.initiative_cooldown_s}s | cap {cfg.initiative_hourly_cap}/h",
-            f"Resolved channels: {', '.join(sorted(self.bot.channels)) or '(none)'}",
+            f"up {int((time.time() - _START) / 60)} min",
+            *health_lines(self.bot),
         ]
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 

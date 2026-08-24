@@ -50,6 +50,7 @@ class Config:
     ch_general: str = "general"
     ch_mod_log: str = "mod-log"
     ch_feedback: str = "feedback"
+    ch_bug_reports: str = "bug-reports"
     ch_announcements: str = "announcements"
     tester_role_name: str = "Slingy Tester"
     group_url: str = "https://groups.google.com/g/slingy-spider-testers"

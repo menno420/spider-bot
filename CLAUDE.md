@@ -1,7 +1,8 @@
 # spider-bot - agent boot file
 
 Spider Bot: the AI community bot of the **Slingy Spider** Discord server
-(guild `1541447750628147351`). Read `README.md` first, then the estate plan
+(guild `1541447750628147351`). Read `README.md` first, then `docs/product-shape.md` (what the bot is
+for and how it should feel), then the estate plan
 at fleet-manager `docs/planning/2026-08-21-game-community-bot/` before any
 structural change - that plan outranks preferences you arrive with.
 
@@ -32,6 +33,19 @@ structural change - that plan outranks preferences you arrive with.
 12. **Cog portability (OD-19)**: plain `commands.Cog` classes with
     `async def setup(bot)` - existing superbot cogs should port with only
     slight alteration.
+
+13. **`ui/` never imports `cogs/`.** The layering is
+    `cogs -> ui -> (presets, roster, cohort, config)`. Anything both
+    layers need lives below them, never in a view (superbot's own view
+    rule, adopted).
+14. **No dead surfaces.** Every route in `ui/routes.py` has a `_do_<key>`
+    handler on `HomePanel`, and a viewer is never shown a button whose
+    audience floor they do not meet. Tests enforce both.
+15. **Rendering is not authorisation.** Every panel callback re-resolves the
+    presser's standing from live Discord state; a panel opened by a mod and
+    pressed by a member must refuse.
+16. **Nothing reaches the server unpreviewed.** Preset posting shows the exact
+    text and destination, then requires a confirm press.
 
 ## Verify
 

@@ -134,6 +134,10 @@ class FakeRole:
         self.id = id
         self.name = name
 
+    @property
+    def mention(self) -> str:
+        return f"<@&{self.id}>"
+
     def __eq__(self, other) -> bool:
         return isinstance(other, FakeRole) and other.id == self.id
 
@@ -142,11 +146,14 @@ class FakeRole:
 
 
 class FakeMember(FakeUser):
-    def __init__(self, id: int, name: str, guild=None, roles: tuple = ()) -> None:
+    def __init__(
+        self, id: int, name: str, guild=None, roles: tuple = (), mod: bool = False
+    ) -> None:
         super().__init__(id, name)
         self.guild = guild
         self.roles = list(roles)
         self.role_reasons: list = []
+        self.guild_permissions = FakePermissions(manage_guild=mod)
 
     async def add_roles(self, role, reason: str | None = None) -> None:
         self.roles.append(role)
@@ -214,6 +221,8 @@ class FakeGuild:
 class _FakeResponse:
     def __init__(self) -> None:
         self.messages: list = []
+        self.modals: list = []
+        self.edits: list = []
         self.deferred = False
 
     async def send_message(self, content=None, **kwargs) -> None:
@@ -221,6 +230,15 @@ class _FakeResponse:
 
     async def defer(self, **kwargs) -> None:
         self.deferred = True
+
+    async def send_modal(self, modal) -> None:
+        self.modals.append(modal)
+
+    async def edit_message(self, **kwargs) -> None:
+        self.edits.append(kwargs)
+
+    def is_done(self) -> bool:
+        return bool(self.messages or self.modals or self.edits or self.deferred)
 
 
 class _FakeFollowup:
@@ -231,12 +249,33 @@ class _FakeFollowup:
         self.messages.append((content, kwargs))
 
 
+class FakePermissions:
+    def __init__(self, manage_guild: bool = False, administrator: bool = False) -> None:
+        self.manage_guild = manage_guild
+        self.administrator = administrator
+        self.manage_roles = manage_guild
+
+
 class FakeInteraction:
-    def __init__(self, guild, user=None) -> None:
+    def __init__(self, guild, user=None, channel=None) -> None:
         self.guild = guild
         self.user = user if user is not None else FakeUser(1, "Menno420")
+        self.channel = channel if channel is not None else FakeChannel(name="general")
+        self.channel_id = self.channel.id
         self.response = _FakeResponse()
         self.followup = _FakeFollowup()
+
+    @property
+    def embeds(self) -> list:
+        """Every embed this interaction produced, whichever route it used."""
+        out = []
+        for _c, kw in [*self.response.messages, *self.followup.messages]:
+            if kw.get("embed") is not None:
+                out.append(kw["embed"])
+        for kw in self.response.edits:
+            if kw.get("embed") is not None:
+                out.append(kw["embed"])
+        return out
 
     @property
     def replies(self) -> list:

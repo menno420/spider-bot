@@ -11,7 +11,8 @@ import asyncio
 import pytest
 from conftest import FakeAI, FakeBot, FakeChannel, FakeMessage, FakeUser, make_cfg
 
-from spiderbot.cogs.community import _OPTED_IN, CommunityCog, _steps_embed
+from spiderbot.cogs.community import _OPTED_IN, CommunityCog
+from spiderbot.presets import steps_embed
 
 
 @pytest.mark.parametrize(
@@ -28,7 +29,7 @@ def test_opted_in_regex_rejects(text):
 
 def test_steps_embed_carries_official_links():
     cfg = make_cfg()
-    embed = _steps_embed(cfg)
+    embed = steps_embed(cfg)
     assert cfg.group_url in embed.description
     assert cfg.optin_url in embed.description
     assert "tester" in embed.title.lower()
