@@ -75,6 +75,27 @@ class FakeChannel:
     async def send(self, *args, **kwargs):
         self.sent.append((args, kwargs))
 
+    def history(self, *, limit: int = 100):
+        """Newest-first, like Discord's - what `memory.read_latest` relies on."""
+        contents = [a[0] for a, _kw in self.sent if a]
+        return _FakeHistory(list(reversed(contents))[:limit])
+
+
+class _FakeHistory:
+    def __init__(self, contents) -> None:
+        self._items = [SimpleNamespace(content=c) for c in contents]
+        self._i = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._i >= len(self._items):
+            raise StopAsyncIteration
+        item = self._items[self._i]
+        self._i += 1
+        return item
+
 
 class FakeMessage:
     def __init__(
@@ -140,9 +161,22 @@ class FakeBot:
 class FakeRole:
     """Compares by id so `role in member.roles` behaves like Discord's."""
 
-    def __init__(self, id: int = 1, name: str = "Slingy Tester") -> None:
+    def __init__(
+        self,
+        id: int = 1,
+        name: str = "Slingy Tester",
+        position: int = 1,
+        managed: bool = False,
+        default: bool = False,
+    ) -> None:
         self.id = id
         self.name = name
+        self.position = position
+        self.managed = managed  # integration-owned: Discord refuses to grant it
+        self._default = default
+
+    def is_default(self) -> bool:
+        return self._default
 
     @property
     def mention(self) -> str:
@@ -165,8 +199,8 @@ class FakeMember(FakeUser):
         self.role_reasons: list = []
         self.guild_permissions = FakePermissions(manage_guild=mod)
 
-    async def add_roles(self, role, reason: str | None = None) -> None:
-        self.roles.append(role)
+    async def add_roles(self, *roles, reason: str | None = None) -> None:
+        self.roles.extend(roles)
         self.role_reasons.append(("add", reason))
 
     async def remove_roles(self, role, reason: str | None = None) -> None:
@@ -222,6 +256,14 @@ class FakeGuild:
         self.audit_calls: list = []
         self._audit_entries = list(audit_entries)
         self._audit_error = audit_error
+
+    @property
+    def me(self):
+        """The bot's own member object - its top role is the grant ceiling."""
+        return SimpleNamespace(top_role=FakeRole(999, "Spider Bot", position=100))
+
+    def get_role(self, role_id):
+        return next((r for r in self.roles if r.id == role_id), None)
 
     def audit_logs(self, *, limit=None, action=None):
         self.audit_calls.append((limit, action))

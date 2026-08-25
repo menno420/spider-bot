@@ -69,6 +69,12 @@ structural change - that plan outranks preferences you arrive with.
     replied_user=False` explicitly rather than inheriting narrowness from
     another file.
 
+21. **The tester role is never granted by code.** Not by the AI, not by a
+    listener, not on rejoin. It mirrors who is actually opted in on Google
+    Play, which only a human can confirm; code that grants it inflates the one
+    number the project is ranked against. `cogs/membership.py` restores every
+    other role automatically and deliberately raises this one to the owner.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

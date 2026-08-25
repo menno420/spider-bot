@@ -52,6 +52,9 @@ class Config:
     ch_feedback: str = "feedback"
     ch_bug_reports: str = "bug-reports"
     ch_announcements: str = "announcements"
+    # Private staff channel used as the bot's durable memory (spiderbot/memory.py).
+    # Absent = membership memory silently off, like any other unconfigured feature.
+    ch_bot_state: str = "bot-state"
     tester_role_name: str = "Slingy Tester"
     group_url: str = "https://groups.google.com/g/slingy-spider-testers"
     optin_url: str = "https://play.google.com/apps/testing/com.menno420.slingyspider"

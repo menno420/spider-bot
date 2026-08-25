@@ -20,6 +20,7 @@ _EXTENSIONS = (
     "spiderbot.cogs.admin",
     "spiderbot.cogs.chat",
     "spiderbot.cogs.home",
+    "spiderbot.cogs.membership",
 )
 
 
@@ -79,6 +80,7 @@ class SpiderBot(commands.Bot):
             self.cfg.ch_feedback,
             self.cfg.ch_bug_reports,
             self.cfg.ch_announcements,
+            self.cfg.ch_bot_state,
         }
         for ch in guild.channels:
             if ch.name in wanted:

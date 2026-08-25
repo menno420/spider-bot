@@ -16,7 +16,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit, cohort, roster, style
+from spiderbot import audit, cohort, memory, roster, style
 
 log = logging.getLogger("spiderbot.tester")
 
@@ -65,6 +65,16 @@ class TesterGroup(app_commands.Group):
             self.bot.channels.get("mod-log"), "Tester granted",
             f"{user} granted by {interaction.user}. Roster now {count}.",
             style.SUCCESS,
+        )
+        # Beyond the audit log's ~45 days: who verified them, and when.
+        await memory.write(
+            self.bot.channels.get(self.bot.cfg.ch_bot_state),
+            {
+                "kind": "tester_verified",
+                "user": user.id,
+                "name": str(user),
+                "by": str(interaction.user),
+            },
         )
         audit.stdout_event("tester_granted", user=str(user), by=str(interaction.user), count=count)
 
