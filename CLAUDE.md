@@ -56,7 +56,13 @@ structural change - that plan outranks preferences you arrive with.
     from live Discord state at click time, so authority is re-resolved on the
     way back too. Restoring a captured snapshot would hand someone the panel
     they had a minute ago, which is invariant 15 through the back door.
-19. **The two deliberate pings are spelled out at the call site.**
+19. **Ordinary logs go to stdout, problems to stderr.** `configure_logging`
+    splits them, because the host tags every stderr line as an error -
+    `basicConfig` would put routine boot chatter and a real crash in the same
+    red bucket, which is the same as having no error signal. The JSON audit
+    trail goes to stdout via `print`, where Railway parses it into structured
+    fields (so its `message` looks empty and the payload is in `attributes`).
+20. **The two deliberate pings are spelled out at the call site.**
     `AllowedMentions` leaves unset fields as a sentinel that reads as True;
     they resolve to False only via the client-wide default. The welcome ping
     and `ping_testers` state `everyone=False, roles=..., users=...,
@@ -72,7 +78,13 @@ not a gate). Live check: run locally with the token from the owner's env
 five resolved channels - but never leave a local instance running while the
 Railway worker is up: that is two live bots answering in the real server.
 Deploy = push to main (Railway auto-deploys the `spider-bot` service; verify
-the new deployment's `meta.commitHash` equals HEAD).
+the new deployment's `meta.commitHash` equals HEAD). **`railway.json` sets
+watch patterns** (`spiderbot/**`, `requirements.txt`, `railway.json`,
+`.python-version`), so a docs- or tests-only commit deliberately does *not*
+deploy and the live `commitHash` will lag HEAD - that is correct, not a
+failure. Without them a scheduled data commit once restarted a donor's
+production worker ~293 times in one billing cycle. Force a deploy from the
+Railway dashboard (service -> Deployments -> Redeploy) if you ever need one.
 
 ## Venue rules
 
