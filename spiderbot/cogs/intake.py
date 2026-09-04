@@ -90,6 +90,7 @@ OFFER_COOLDOWN_S = 900
 MIN_LENGTH = 25
 
 
+
 def detect(text: str) -> Category | None:
     """The likely category, or None. Deterministic; no model call."""
     if len(text.strip()) < MIN_LENGTH:
@@ -163,6 +164,16 @@ class ConfirmFiling(
                 "That is someone else's report.", ephemeral=True
             )
             return
+        # The draft is consumed, not just read. This item is rebuilt from its
+        # custom_id on every press, so any second click that reaches the
+        # gateway before the edit lands - a double tap, a stale client, a
+        # flaky connection - would otherwise file the same report twice.
+        already = draft.get("filed_report_id")
+        if already:
+            await interaction.response.send_message(
+                f"Already saved as `{already}`.", ephemeral=True
+            )
+            return
         try:
             category = Category(draft.get("category", "general"))
         except ValueError:
@@ -179,6 +190,10 @@ class ConfirmFiling(
             ),
             correlation_id=str(draft.get("correlation_id", "")),
         )
+        if outcome.ok and outcome.report is not None:
+            await backing.append(
+                DRAFTS, self.draft_id, {**draft, "filed_report_id": outcome.report.id}
+            )
         await interaction.response.edit_message(
             content=None,
             embed=style.embed(
@@ -199,7 +214,15 @@ class DismissFiling(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"sbnothanks:(?P<draft>[A-Z0-9-]{8,64})",
 ):
-    """No thanks. Also persistent, so a stale offer is never a dead button."""
+    """No thanks. Also persistent, so a stale offer is never a dead button.
+
+    Ownership is checked here for exactly the reason it is checked on the
+    Save button: the offer is posted in a PUBLIC channel and every button on
+    it is pressable by every member. `MEASURED` 2026-09-04: without this,
+    any member could press "No thanks" on somebody else's crash report and
+    the offer was edited away for everyone, with nothing recorded and no way
+    for the reporter to tell it had happened.
+    """
 
     def __init__(self, draft_id: str) -> None:
         self.draft_id = draft_id
@@ -216,6 +239,17 @@ class DismissFiling(
         return cls(match["draft"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        backing = getattr(getattr(interaction.client, "intake", None), "_store", None)
+        draft = await backing.get(DRAFTS, self.draft_id) if backing else None
+        # A draft that has expired out of the store is nobody's to protect and
+        # the button is dead anyway, so an unknown draft is dismissible: the
+        # failure direction is a stale panel someone can tidy, not a live
+        # report someone else can silence.
+        if draft is not None and draft.get("user_id") != interaction.user.id:
+            await interaction.response.send_message(
+                "That is someone else's report.", ephemeral=True
+            )
+            return
         await interaction.response.edit_message(
             content="No problem.", embed=None, view=None
         )

@@ -216,7 +216,7 @@ class ModerationCog(commands.Cog):
             Operation(action.value),
             guild=interaction.guild,
             subject=member,
-            actor=str(interaction.user),
+            actor=interaction.user,
             reason=reason,
         )
         if case.refusal_reason:

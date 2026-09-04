@@ -155,6 +155,37 @@ structural change - that plan outranks preferences you arrive with.
     disagreement is invisible — one decides whether a message is judged, the
     other whether the action lands, and a member in the gap gets both.
 
+31. **Every button on a public panel re-resolves authority in its own
+    callback.** A `DynamicItem` is rebuilt from its `custom_id` on every press
+    by whoever pressed it, and the offer panels are posted in `#general`.
+    `MEASURED` 2026-09-04: the Save button checked ownership and the "No
+    thanks" button beside it did not, so any member could silence somebody
+    else's crash report. Also consume what a button acts on — the Save button
+    filed the same report twice on a double tap because the draft was read and
+    never written back.
+
+32. **Member text can never carry an id this system minted.**
+    `redact.for_github` breaks `SB-…` ids with a zero-width space, and
+    `find_issue_by_marker` believes a search hit only when the returned body
+    actually contains the marker. The intake marker is the ONLY backstop
+    against republication and it lives in a field a member types: `MEASURED`
+    2026-09-04, writing report A's id into report B made A resolve to B's
+    issue, so A never reached the tracker while every panel said "filed".
+
+33. **A field the schema collects and nothing reads is a lie.**
+    `targets_member` (invariant 29) and `PublishFailure.retryable` were both
+    computed, stored, documented as protections, and consulted nowhere — the
+    second one meaning a permanently-failed report was re-POSTed on every
+    retry pass, for ever. Either read it or delete it.
+
+34. **Authority is never handed back automatically.** A returning member gets
+    every role restored except the tester role and any role carrying a
+    moderation permission; the withheld ones are reported to the mod log rather
+    than dropped silently. Same reasoning as the tester role: an account that
+    left and came back is not proof the same person is on it. And the bot lends
+    nothing on the staff path — `/modact`'s actor must hold the permission the
+    operation needs and outrank the subject, or the gate refuses.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

@@ -104,11 +104,20 @@ def is_staff(member) -> bool:
 
 
 
-def check(operation: Operation, *, guild, subject, me=None) -> GateResult:
+def check(operation: Operation, *, guild, subject, me=None, actor=None) -> GateResult:
     """May this operation be performed on this member, by this bot, right now?
 
     `me` defaults to `guild.me`. `subject` is the member the operation would
     act on; for `DELETE_MESSAGE` that is the message's author.
+
+    `actor` is the human asking, on the staff path. When given, the bot lends
+    nothing the actor does not already hold: they must have the permission the
+    operation needs, and they may not act on someone at or above their own
+    highest role. `MEASURED` 2026-09-04: `/modact` is gated at
+    `default_permissions(moderate_members=True)` and its choice list includes
+    kick and ban, and nothing downstream looked at the actor at all — so a
+    junior helper given only Timeout Members could ban anyone the BOT could
+    ban. The autonomous path passes no actor and is unchanged.
     """
     if operation in (Operation.NOTHING, Operation.FLAG_FOR_REVIEW):
         return GateResult.allow()  # no side effect to gate
@@ -149,4 +158,24 @@ def check(operation: Operation, *, guild, subject, me=None) -> GateResult:
                 f"the bot does not have the {needed.replace('_', ' ')} permission",
                 missing_permission=needed,
             )
+
+    # -- the human asking, when there is one. Last, because "you cannot do this
+    # yourself" is only worth saying once the action was otherwise possible.
+    if actor is not None:
+        if needed:
+            actor_perms = getattr(actor, "guild_permissions", None)
+            if actor_perms is None or not (
+                getattr(actor_perms, needed, False)
+                or getattr(actor_perms, "administrator", False)
+            ):
+                return GateResult.deny(
+                    f"you do not have the {needed.replace('_', ' ')} permission "
+                    "yourself, and the bot does not lend its own",
+                    missing_permission=needed,
+                )
+        # The guild owner outranks everyone and has no role above them, so the
+        # hierarchy check would otherwise lock the owner out of their own tools.
+        is_owner = getattr(actor, "id", None) == getattr(guild, "owner_id", object())
+        if not is_owner and _top_role_position(subject) >= _top_role_position(actor):
+            return GateResult.deny("that member is at or above your own highest role")
     return GateResult.allow()

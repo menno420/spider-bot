@@ -197,6 +197,15 @@ class Report:
     #: means it stays private — see `may_publish`.
     approved_by: str = ""
 
+    #: Why the last publish attempt failed, and whether trying again could
+    #: ever help. `github_sink` classifies 404 (wrong repo or no access), 410
+    #: (issues disabled) and 422 (rejected) as permanent, and its docstring
+    #: says that distinction "is what stops a retry loop hammering a 404
+    #: forever" — but nothing read `.retryable` until 2026-09-04, so a
+    #: permanently-failed report was re-POSTed on every pass, for ever.
+    publish_failure: str = ""
+    publish_failure_retryable: bool = True
+
     status: Status = Status.DRAFT
     resolution: str = ""
     schema_version: int = SCHEMA_VERSION
@@ -252,6 +261,7 @@ class Report:
             and bool(self.approved_by)
             and self.status in PUBLISHABLE_STATUSES
             and self.github_issue_number is None
+            and self.publish_failure_retryable
         )
 
     def published_text(self) -> str:
@@ -402,6 +412,8 @@ class Report:
             "github_issue_number": self.github_issue_number,
             "github_issue_url": self.github_issue_url,
             "duplicate_of": self.duplicate_of,
+            "publish_failure": self.publish_failure,
+            "publish_failure_retryable": self.publish_failure_retryable,
             "status": str(self.status),
             "resolution": self.resolution,
             "notes": list(self.notes),
@@ -449,6 +461,8 @@ class Report:
             github_issue_number=data.get("github_issue_number"),
             github_issue_url=str(data.get("github_issue_url") or ""),
             duplicate_of=str(data.get("duplicate_of") or ""),
+            publish_failure=str(data.get("publish_failure") or ""),
+            publish_failure_retryable=bool(data.get("publish_failure_retryable", True)),
             status=status,
             resolution=str(data.get("resolution") or ""),
             notes=tuple(str(x) for x in (data.get("notes") or [])),

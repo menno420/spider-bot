@@ -22,20 +22,39 @@ import discord
 from discord.ext import commands
 
 from spiderbot import audit, memory, style
+from spiderbot.moderation import gate
 
 log = logging.getLogger("spiderbot.membership")
 
 SNAPSHOT = "member_snapshot"
 
 
+def is_privileged(role) -> bool:
+    """True when this role carries a moderation-shaped permission.
+
+    Reads `gate.STAFF_PERMISSIONS`, the one definition of who counts as staff,
+    so a permission added there is honoured here without a second edit.
+    """
+    perms = getattr(role, "permissions", None)
+    if perms is None:
+        return False
+    return any(getattr(perms, name, False) for name in gate.STAFF_PERMISSIONS)
+
+
 def restorable_roles(member, guild, tester_role_name: str) -> list:
     """The roles it is both safe and possible to hand back.
 
-    Four exclusions, each for a different reason:
+    Five exclusions, each for a different reason:
     - `@everyone` is not a grantable role;
     - managed roles belong to integrations (bots, boosts) and Discord refuses;
     - anything at or above the bot's own top role would fail on hierarchy;
-    - the tester role is a human decision, never an automatic one.
+    - the tester role is a human decision, never an automatic one;
+    - **so is a role carrying a moderation permission.** Same reasoning,
+      applied where it had not been: a member who left holding Manage Guild
+      got it back silently the moment they rejoined, from an account anyone
+      who had taken it over would then be moderating with. Handing back
+      authority is a human decision too. Withheld roles are reported to the
+      owner rather than dropped.
     """
     me = getattr(guild, "me", None)
     ceiling = getattr(me, "top_role", None)
@@ -46,6 +65,8 @@ def restorable_roles(member, guild, tester_role_name: str) -> list:
         if getattr(role, "managed", False):
             continue
         if getattr(role, "name", None) == tester_role_name:
+            continue
+        if is_privileged(role):
             continue
         if ceiling is not None and getattr(role, "position", 0) >= getattr(ceiling, "position", 0):
             continue
@@ -98,12 +119,20 @@ class MembershipCog(commands.Cog):
             return  # a genuinely new arrival - the welcome cog has them
 
         guild = member.guild
-        wanted, missing = [], []
+        wanted, missing, withheld = [], [], []
         for entry in record.get("roles") or []:
             role = guild.get_role(entry.get("id")) or discord.utils.get(
                 getattr(guild, "roles", ()) or (), name=entry.get("name")
             )
-            (wanted if role is not None else missing).append(role or entry.get("name"))
+            if role is None:
+                missing.append(entry.get("name"))
+            elif is_privileged(role):
+                # Checked again here, not only at snapshot time: a role can be
+                # granted a moderation permission while the member is away, and
+                # the snapshot would then hand it back as an ordinary role.
+                withheld.append(getattr(role, "name", "?"))
+            else:
+                wanted.append(role)
 
         restored = []
         if wanted:
@@ -115,10 +144,40 @@ class MembershipCog(commands.Cog):
 
         audit.stdout_event(
             "member_returned", user=str(member), restored=restored,
-            missing=missing, was_tester=bool(record.get("was_tester")),
+            missing=missing, withheld=withheld,
+            was_tester=bool(record.get("was_tester")),
         )
+        if withheld:
+            # Independent of the tester prompt: a withheld moderation role is
+            # the owner's decision to make, and a silent withhold is a role
+            # quietly disappearing from someone who had it.
+            await self._report_withheld(member, withheld)
         if record.get("was_tester"):
             await self._prompt_reverify(member, restored)
+
+    async def _report_withheld(self, member, withheld: list[str]) -> None:
+        """Say which moderation roles were NOT handed back, and why."""
+        await audit.modlog_event(
+            self.bot.channels.get("mod-log"),
+            f"{style.WARN} Moderator role not restored automatically",
+            "\n".join(
+                [
+                    f"**{member.display_name}** rejoined holding "
+                    f"{', '.join(withheld)} when they left.",
+                    "",
+                    "I have **not** given "
+                    + ("them" if len(withheld) > 1 else "it")
+                    + " back. Handing back a moderation permission is a human "
+                    "decision, the same as the tester role: an account that "
+                    "left and came back is not proof the same person is on it.",
+                    "",
+                    "Add "
+                    + ("them" if len(withheld) > 1 else "it")
+                    + " by hand if that is right.",
+                ]
+            ),
+            style.WARNING,
+        )
 
     async def _prompt_reverify(self, member, restored: list[str]) -> None:
         """Tell the owner what the bot knows - and that it did NOT act on it."""

@@ -68,6 +68,16 @@ _NEWLINES = re.compile(r"[\r\n]+")
 # make two different reports look identical. Zero-width joiner and friends;
 # the one we insert ourselves is added back after stripping.
 _INVISIBLES = re.compile(r"[​-‏‪-‮⁠-⁯﻿]")
+#: An id minted by `spiderbot.ids` - `SB-<kind>-<time>-<random>` in the
+#: I/L/O/U-free base32 alphabet. Broken in member text on the way to GitHub,
+#: because the intake marker (``Intake id `SB-R-...` ``) is the ONLY backstop
+#: against republication and it is a plain string in a field a member types.
+#: `MEASURED` 2026-09-04: a member handed report A's id in their receipt wrote
+#: it into report B's description; B was published first, and A was then
+#: recorded as "published" at B's issue number without an issue ever being
+#: created for it. A's text never reached the tracker and both panels said it
+#: had. The break is a zero-width space, so a reader still sees the id.
+_MINTED_ID = re.compile(r"\bSB-([A-Z]{1,2})-([0-9A-Z]{4,12})-([0-9A-Z]{4,10})\b")
 
 
 def clean(text: str, *, limit: int | None = None) -> str:
@@ -114,6 +124,7 @@ def for_github(text: str, *, limit: int | None = None) -> str:
     developer reading it. Cheap to prevent, invisible when it does not apply.
     """
     broken = _GITHUB_SIGIL.sub(rf"\1{ZERO_WIDTH}", clean(text, limit=limit))
+    broken = _MINTED_ID.sub(rf"SB{ZERO_WIDTH}-\1-\2-\3", broken)
     return _FENCE_RUN.sub("'''", broken)
 
 

@@ -294,14 +294,29 @@ class DiscordChannelStore:
         if self._channel is None:
             return False
         envelopes: list[dict[str, Any]] = []
+        read = 0
         try:
             async for message in self._channel.history(limit=HISTORY_LIMIT):
+                read += 1
                 env = decode_chunk(getattr(message, "content", ""))
                 if env is not None:
                     envelopes.append(env)
         except discord.HTTPException:
             log.warning("store: could not read history; index stays cold")
             return False
+        if read >= HISTORY_LIMIT:
+            # The channel is longer than one cold read. Everything older than
+            # this window is invisible to the index and silently absent from
+            # every panel and every retry queue — which reads exactly like a
+            # report having been deleted. Say it, loudly, rather than serving
+            # a partial store as if it were the whole one.
+            log.error(
+                "store: cold read hit the %s-message horizon in #%s — records "
+                "older than that are NOT loaded and will look missing. The "
+                "channel needs archiving, or the store needs a real database.",
+                HISTORY_LIMIT,
+                getattr(self._channel, "name", "?"),
+            )
         envelopes.reverse()  # history is newest-first; assemble() wants append order
         index: dict[str, dict[str, dict[str, Any]]] = {}
         by_collection: dict[str, list[dict[str, Any]]] = {}

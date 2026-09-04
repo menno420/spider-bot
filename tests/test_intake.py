@@ -12,12 +12,15 @@ nothing: the brief for this work names the journeys, and these are them.
 
 from __future__ import annotations
 
+import json
 import time
 from asyncio import run
 
 import pytest
+from conftest import FakeInteraction, FakeUser
 
 from spiderbot import redact, store
+from spiderbot.cogs import intake as intake_cog
 from spiderbot.intake import github_sink, privacy
 from spiderbot.intake import service as intake_service
 from spiderbot.intake.models import Category, Report, Reporter, Sensitivity, Status
@@ -698,3 +701,237 @@ def test_the_receipt_no_longer_promises_a_github_issue():
 
 def test_approval_survives_the_store_round_trip():
     assert Report.from_record(a_report(approved_by="menno").as_record()).approved_by == "menno"
+
+
+# -- what an adversarial review executed against the committed code -----------
+
+
+def test_a_member_cannot_steal_another_report_by_writing_its_id_in_their_own():
+    """`MEASURED` 2026-09-04, the whole chain reproduced.
+
+    The intake marker is the only backstop against republication, and it is a
+    plain string in a field a member types. A member handed report A's id in
+    their receipt wrote it into report B's description; B published first, and
+    A then resolved to B's issue number without an issue ever being created —
+    A's text never reached the tracker while both panels said "filed".
+    """
+    github = FakeGitHub()
+    svc = a_service(github)
+    victim = file_and_approve(svc, title="Swing physics break above 3 km",
+                              description="the reel snaps at altitude")
+    thief = file_and_approve(
+        svc, title="also broken",
+        description=f"see also {victim.report.id} which is the same thing",
+    )
+    run(svc.publish(thief.report.id))
+    run(svc.publish(victim.report.id))
+
+    assert len(github.created) == 2, "the victim's report must reach the tracker"
+    numbers = {
+        run(svc.get(victim.report.id)).github_issue_number,
+        run(svc.get(thief.report.id)).github_issue_number,
+    }
+    assert len(numbers) == 2, "two reports, two issues"
+    victim_body = next(b for _t, b, _l in github.created if "reel snaps" in b)
+    assert victim.report.marker() in victim_body
+
+
+def test_the_marker_break_is_invisible_to_a_reader():
+    """Positive control: the id is still readable in the published body, so the
+    defence costs the developer nothing."""
+    broken = redact.for_github("see also SB-R-M1PB8V6G-KT0GBA which is the same")
+    assert "SB-R-M1PB8V6G-KT0GBA" not in broken
+    assert broken.replace(redact.ZERO_WIDTH, "").endswith(
+        "see also SB-R-M1PB8V6G-KT0GBA which is the same"
+    )
+
+
+def test_a_permanent_failure_leaves_the_retry_queue():
+    """`retryable` was computed by the sink, documented as "what stops a retry
+    loop hammering a 404 forever", and read by nothing."""
+    github = FakeGitHub(fail=github_sink.PublishFailure("not_found", "404", retryable=False))
+    svc = a_service(github)
+    out = file_and_approve(svc)
+    run(svc.publish(out.report.id))
+
+    assert run(svc.pending_publication()) == []
+    stuck = run(svc.stuck())
+    assert [r.id for r in stuck] == [out.report.id]
+    assert stuck[0].publish_failure == "not_found"
+    assert run(svc.retry_pending()) == []
+
+
+def test_a_retryable_failure_stays_in_the_queue():
+    """Positive control for the test above: the exclusion must be about the
+    classification, not about failure."""
+    github = FakeGitHub(fail=github_sink.PublishFailure("network", "boom", retryable=True))
+    svc = a_service(github)
+    out = file_and_approve(svc)
+    run(svc.publish(out.report.id))
+
+    assert [r.id for r in run(svc.pending_publication())] == [out.report.id]
+    assert run(svc.stuck()) == []
+
+
+def test_a_report_published_but_unrecorded_is_not_published_twice():
+    """`MEASURED` 2026-09-04: seven presses of the retry command produced seven
+    separate public issues for one report, because a refused store write left
+    the record publishable and the marker search was unavailable too."""
+    github = FakeGitHub()
+    svc = a_service(github)
+    out = file_and_approve(svc)
+
+    real_append = svc._store.append
+
+    async def refuse_the_published_write(collection, key, data):
+        if data.get("status") == "published":
+            return False
+        return await real_append(collection, key, data)
+
+    svc._store.append = refuse_the_published_write
+    run(svc.publish(out.report.id))
+    assert len(github.created) == 1
+
+    # The marker search is down too — the exact case the in-process memory is for.
+    async def search_is_down(marker):
+        return None
+
+    github.find_issue_by_marker = search_is_down
+    for _ in range(7):
+        run(svc.publish(out.report.id))
+    assert len(github.created) == 1, "one report, one issue"
+
+
+def test_one_member_cannot_flood_the_store():
+    """No rate limit existed anywhere on filing, and the store is an
+    append-only channel read to a fixed horizon: enough writes push older
+    records out of every panel, which reads as reports being deleted."""
+    svc = a_service()
+    reporter = Reporter(user_id=42)
+    outcomes = [
+        run(svc.file(category=Category.BUG, title="t", description="d", reporter=reporter))
+        for _ in range(intake_service.FILE_LIMIT + 3)
+    ]
+    assert sum(1 for o in outcomes if o.ok) == intake_service.FILE_LIMIT
+    refused = [o for o in outcomes if not o.ok]
+    assert all(o.failure == "rate_limited" for o in refused)
+    assert "stopped" in refused[0].reporter_message
+
+    # Positive control: a different member is unaffected — the limit is
+    # per-reporter, not a global tap someone else can close.
+    other = run(
+        svc.file(category=Category.BUG, title="t", description="d",
+                 reporter=Reporter(user_id=43))
+    )
+    assert other.ok
+
+
+# -- the two buttons on a PUBLIC offer panel ---------------------------------
+
+
+class _Bot:
+    """Just enough bot for a DynamicItem callback: it reads `bot.intake`."""
+
+    def __init__(self, service) -> None:
+        self.intake = service
+
+
+def _offer(svc, user_id=42, draft_id="SB-R-DRAFT01"):
+    run(
+        svc._store.append(
+            intake_cog.DRAFTS,
+            draft_id,
+            {
+                "user_id": user_id,
+                "category": "bug",
+                "title": "the reel snaps at altitude",
+                "description": "it happened twice above 3 km",
+                "channel_id": 7,
+                "message_id": 8,
+                "correlation_id": "SB-C-TEST",
+            },
+        )
+    )
+    return draft_id
+
+
+def test_a_stranger_cannot_dismiss_someone_elses_report_offer():
+    """`MEASURED` 2026-09-04: DismissFiling had no ownership check at all, and
+    the offer is posted in a PUBLIC channel. Any member could press "No thanks"
+    on somebody else's crash report; the panel was edited away for everyone and
+    nothing was recorded."""
+    svc = a_service()
+    draft_id = _offer(svc, user_id=42)
+    interaction = FakeInteraction(guild=None, user=FakeUser(99, "stranger"))
+    interaction.client = _Bot(svc)
+
+    run(intake_cog.DismissFiling(draft_id).callback(interaction))
+    assert interaction.response.edits == [], "the offer must still be there"
+    assert "someone else" in (interaction.response.messages[0][0] or "")
+
+    # Positive control: the reporter themselves CAN dismiss it.
+    mine = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    mine.client = _Bot(svc)
+    run(intake_cog.DismissFiling(draft_id).callback(mine))
+    assert mine.response.edits and mine.response.edits[0]["content"] == "No problem."
+
+
+def test_a_double_press_on_save_files_one_report_not_two():
+    """The item is rebuilt from its custom_id on every press and the draft was
+    never consumed, so any second click that reached the gateway before the
+    edit landed filed the same report again."""
+    svc = a_service()
+    draft_id = _offer(svc, user_id=42)
+    button = intake_cog.ConfirmFiling(draft_id)
+
+    first = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    first.client = _Bot(svc)
+    run(button.callback(first))
+    second = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    second.client = _Bot(svc)
+    run(button.callback(second))
+
+    assert len(run(svc.all_reports())) == 1
+    assert "Already saved" in (second.response.messages[0][0] or "")
+
+
+# -- the real HTTP client's own robustness -----------------------------------
+
+
+def _client_with(status, text):
+    """An HttpGitHubClient whose one transport call is replaced. Nothing here
+    reaches the network; the point is what the client does with a response."""
+    client = github_sink.HttpGitHubClient(token="t", repo="o/r", session=object())
+
+    async def request(method, url, payload=None):
+        return status, text
+
+    client._request = request
+    return client
+
+
+def test_a_marker_hit_is_not_believed_when_the_body_does_not_carry_it():
+    """GitHub's search tokenises, so a quoted phrase is a hint. The marker sits
+    in a field a member types, and an unverified hit is a way to make one
+    report resolve to somebody else's issue."""
+    body = 'no marker here'
+    client = _client_with(200, json.dumps({"items": [{"number": 7, "body": body}]}))
+    assert run(client.find_issue_by_marker("Intake id `SB-R-AAAA`")) is None
+
+    # Positive control: a hit whose body DOES carry it is believed.
+    good = json.dumps(
+        {"items": [{"number": 7, "body": "text\nIntake id `SB-R-AAAA`", "html_url": "u"}]}
+    )
+    found = run(_client_with(200, good).find_issue_by_marker("Intake id `SB-R-AAAA`"))
+    assert found is not None and found.number == 7
+
+
+@pytest.mark.parametrize(
+    "text",
+    ['[1, 2, 3]', '"a string"', 'null', '{"items": [{"number": "not-a-number"}]}'],
+)
+def test_an_unexpected_two_hundred_body_does_not_raise_out_of_the_client(text):
+    """The class's docstring promises "never raises: every failure is a
+    PublishFailure". `json.loads(text).get(...)` raises AttributeError on a
+    JSON array, which an interposing proxy or CDN error page can return."""
+    assert run(_client_with(200, text).find_issue_by_marker("m")) is None

@@ -155,6 +155,12 @@ class HttpGitHubClient:
         proceeds to create, because refusing to publish because *search* was
         down would turn a GitHub hiccup into a lost projection. The store's
         publication record is the authoritative check; this is the backstop.
+
+        A hit is believed only when the returned body actually contains the
+        marker. Search matches on tokens, and the marker sits in a field a
+        member types, so an unverified hit is a way to make a report resolve
+        to somebody else's issue. `redact.for_github` breaks minted ids in
+        member text as well; either half alone closes it, and both are cheap.
         """
         from urllib.parse import quote
 
@@ -168,12 +174,28 @@ class HttpGitHubClient:
             log.warning("github: marker search returned %s", status)
             return None
         try:
-            items = json.loads(text).get("items") or []
+            payload = json.loads(text)
         except ValueError:
             return None
+        # Shape, not just parseability: an interposing proxy or CDN error page
+        # can return a 200 whose body is a JSON array, and `.get` on a list
+        # raises out of a class whose docstring promises it never raises.
+        items = payload.get("items") or [] if isinstance(payload, dict) else []
         for item in items:
-            if isinstance(item, dict) and item.get("number"):
+            if not isinstance(item, dict) or not item.get("number"):
+                continue
+            # GitHub's code search tokenises, so a quoted phrase is a hint and
+            # not a guarantee. Confirm the marker is actually in the body
+            # before treating this issue as the report's existing projection —
+            # otherwise a member who wrote another report's id into their own
+            # text makes that report resolve to THIS issue and disappear.
+            body = item.get("body")
+            if isinstance(body, str) and marker not in body:
+                continue
+            try:
                 return Published(int(item["number"]), str(item.get("html_url") or ""))
+            except (TypeError, ValueError):
+                continue
         return None
 
     async def create_issue(self, title, body, labels) -> PublishResult:

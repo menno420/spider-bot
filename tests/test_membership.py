@@ -172,3 +172,61 @@ def test_a_record_from_a_future_schema_is_refused():
 def test_reading_an_unconfigured_store_is_not_an_error():
     assert run(memory.read_latest(None, SNAPSHOT, 1)) is None
     assert run(memory.write(None, {"kind": SNAPSHOT})) is False
+
+
+# -- authority is not restored automatically ---------------------------------
+
+
+def _with_permissions(role, **perms):
+    """A FakeRole carrying real permissions. The shared fake has none, which is
+    why every test above passes either way — this is what makes the privileged
+    branch reachable at all."""
+    from types import SimpleNamespace
+
+    from spiderbot.moderation import gate
+
+    base = dict.fromkeys(gate.STAFF_PERMISSIONS, False)
+    base.update(perms)
+    role.permissions = SimpleNamespace(**base)
+    return role
+
+
+MOD = _with_permissions(FakeRole(7, "Moderator", position=4), manage_guild=True)
+PLAIN = _with_permissions(FakeRole(8, "Regular", position=2))
+
+
+def test_a_moderation_role_is_not_remembered_as_restorable():
+    who = member(FRIEND, MOD, PLAIN)
+    keep = [r.name for r in restorable_roles(who, who.guild, "Slingy Tester")]
+    assert "Moderator" not in keep
+    # Positive control: an ordinary role that HAS a permissions object, and no
+    # moderation permission in it, is still restored — so the exclusion is
+    # about authority and not about carrying permissions at all.
+    assert keep == ["Friend of the Web", "Regular"]
+
+
+def test_a_role_that_became_privileged_while_they_were_away_is_still_withheld(audit_events):
+    """Checked again at restore time, not only at snapshot time: a role can be
+    granted Manage Guild while the member is gone, and the snapshot would then
+    hand it back as the ordinary role it used to be."""
+    cog, bot = build()
+    guild = guild_with(MOD)
+    leaver = FakeMember(7, "Alice", guild=guild, roles=(EVERYONE, FRIEND))
+    run(cog.on_member_remove(leaver))
+
+    returner = FakeMember(7, "Alice", guild=guild, roles=(EVERYONE,))
+    # The snapshot named "Friend of the Web"; that role now carries authority.
+    promoted = _with_permissions(FakeRole(2, "Friend of the Web", position=3), ban_members=True)
+    guild.roles = [EVERYONE, TESTER, promoted, ARTIST, BOOSTER, ABOVE_BOT, MOD]
+    guild._by_id = {r.id: r for r in guild.roles}
+    run(cog.on_member_join(returner))
+
+    assert returner.roles == [EVERYONE], "nothing was handed back"
+    returned = [e for e in audit_events if e["kind"] == "member_returned"]
+    assert returned and returned[0]["withheld"] == ["Friend of the Web"]
+    assert returned[0]["restored"] == []
+    # And the owner is told, rather than the role quietly vanishing.
+    embeds = [kw["embed"] for _args, kw in bot.channels["mod-log"].sent if kw.get("embed")]
+    assert embeds, "a withheld moderation role must reach the mod log"
+    assert "not restored" in embeds[0].title.lower()
+    assert "Friend of the Web" in embeds[0].description

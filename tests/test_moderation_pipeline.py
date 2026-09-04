@@ -95,6 +95,25 @@ ALL_PERMISSIONS = dict(
 )
 
 
+def moderator(user_id=7, name="mod", *, position=40, **overrides):
+    """A staff Member, with real permissions.
+
+    `staff_action` takes the actor as a Member rather than a string precisely
+    so the gate can read their permissions: passing a name meant nothing
+    downstream could check whether the human was allowed to do what they were
+    asking the bot to do for them.
+    """
+    m = member(user_id, name, position=position)
+    perms = dict.fromkeys(gate.STAFF_PERMISSIONS, False)
+    perms.update(
+        moderate_members=True, kick_members=True, ban_members=True,
+        manage_messages=True, send_messages=True,
+    )
+    perms.update(overrides)
+    m.guild_permissions = types.SimpleNamespace(**perms)
+    return m
+
+
 def a_guild(*, bot_position=50, owner_id=1, permissions=None):
     """A guild whose `me` is settable.
 
@@ -457,11 +476,12 @@ def test_a_moderator_can_kick_through_the_typed_operation_and_is_the_actor():
     svc = a_service(mode="shadow")
     case = run(
         svc.staff_action(
-            Operation.KICK, guild=guild, subject=subject, actor="mod#1", reason="spam"
+            Operation.KICK, guild=guild, subject=subject, actor=moderator(),
+            reason="spam",
         )
     )
     assert case.status is CaseStatus.ACTED
-    assert case.actor == "mod#1"
+    assert case.actor == "mod"
     assert len(subject.kick_calls) == 1
 
 
@@ -473,7 +493,7 @@ def test_a_staff_action_still_goes_through_the_gate():
             Operation.KICK,
             guild=guild,
             subject=member(5, "big", position=20),
-            actor="mod#1",
+            actor=moderator(position=90),
             reason="x",
         )
     )
@@ -488,7 +508,7 @@ def test_shadow_mode_does_not_disable_the_moderators_own_tools():
     case = run(
         svc.staff_action(
             Operation.TIMEOUT_SHORT, guild=guild, subject=subject,
-            actor="mod#1", reason="x",
+            actor=moderator(), reason="x",
         )
     )
     assert case.status is CaseStatus.ACTED
@@ -681,3 +701,95 @@ def test_an_ordinary_member_is_still_actable():
     service = a_service(mode="enforce", text=verdict_json())
     run(service.handle_message(a_message(author=ordinary), bot_user_id=999))
     assert len(ordinary.timeout_calls) == 1
+
+
+# -- the staff path lends the bot's permissions to nobody ---------------------
+
+
+@pytest.mark.parametrize(
+    ("operation", "held"),
+    [
+        (Operation.BAN, "moderate_members"),
+        (Operation.KICK, "moderate_members"),
+        (Operation.TIMEOUT_LONG, "manage_messages"),
+    ],
+)
+def test_a_moderator_cannot_borrow_a_permission_they_do_not_hold(operation, held):
+    """`MEASURED` 2026-09-04: `/modact` is gated at
+    `default_permissions(moderate_members=True)` and its choice list includes
+    kick and ban, and nothing after that decorator ever looked at the actor. A
+    helper role granted only Timeout Members could ban anyone the BOT could
+    ban."""
+    junior = moderator(name="junior", **{p: False for p in gate.STAFF_PERMISSIONS})
+    junior.guild_permissions = types.SimpleNamespace(
+        **{**dict.fromkeys(gate.STAFF_PERMISSIONS, False), held: True, "send_messages": True}
+    )
+    subject = member(5, "target")
+    subject.ban_calls, subject.kick_calls = [], []
+
+    async def ban(reason=None, delete_message_seconds=0):
+        subject.ban_calls.append(reason)
+
+    async def kick(reason=None):
+        subject.kick_calls.append(reason)
+
+    subject.ban, subject.kick = ban, kick
+    case = run(
+        a_service(mode="enforce").staff_action(
+            operation, guild=a_guild(), subject=subject, actor=junior, reason="x"
+        )
+    )
+    assert case.status is CaseStatus.REFUSED
+    assert "yourself" in case.refusal_reason
+    assert subject.ban_calls == [] and subject.kick_calls == []
+    assert subject.timeout_calls == []
+
+
+def test_a_moderator_who_does_hold_it_still_can():
+    """Positive control: the check is about the actor's permission, not a
+    blanket refusal of the staff path."""
+    subject = member(5, "target")
+    case = run(
+        a_service(mode="enforce").staff_action(
+            Operation.TIMEOUT_SHORT, guild=a_guild(), subject=subject,
+            actor=moderator(), reason="x",
+        )
+    )
+    assert case.status is CaseStatus.ACTED
+    assert len(subject.timeout_calls) == 1
+
+
+def test_a_moderator_cannot_act_on_someone_at_or_above_their_own_role():
+    peer = member(5, "peer", position=40)
+    case = run(
+        a_service(mode="enforce").staff_action(
+            Operation.TIMEOUT_SHORT, guild=a_guild(), subject=peer,
+            actor=moderator(position=40), reason="x",
+        )
+    )
+    assert case.status is CaseStatus.REFUSED
+    assert "your own highest role" in case.refusal_reason
+    assert peer.timeout_calls == []
+
+
+def test_the_guild_owner_is_not_locked_out_by_the_hierarchy_check():
+    """The owner outranks everyone and has no role above them, so a naive
+    hierarchy check would take their own tools away."""
+    guild = a_guild(owner_id=7)
+    subject = member(5, "target", position=40)
+    case = run(
+        a_service(mode="enforce").staff_action(
+            Operation.TIMEOUT_SHORT, guild=guild, subject=subject,
+            actor=moderator(user_id=7, position=40), reason="x",
+        )
+    )
+    assert case.status is CaseStatus.ACTED
+
+
+def test_the_autonomous_path_passes_no_actor_and_is_unchanged():
+    """The actor checks must not leak into the AI path, where there is no human
+    and `actor=None` is the correct answer."""
+    subject = member(5, "member")
+    service = a_service(mode="enforce", text=verdict_json())
+    run(service.handle_message(a_message(author=subject), bot_user_id=999))
+    assert len(subject.timeout_calls) == 1

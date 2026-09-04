@@ -258,7 +258,7 @@ class ModerationService:
         *,
         guild,
         subject,
-        actor: str,
+        actor,
         reason: str,
         message=None,
     ) -> Case:
@@ -266,8 +266,14 @@ class ModerationService:
 
         Kick and ban are reachable ONLY here — no policy rule produces them
         (`policy.py`) — so the human is always the actor of record. The gate
-        still applies: a moderator asking the bot to act against someone above
-        it gets a legible refusal instead of a 403.
+        still applies twice over: a moderator asking the bot to act against
+        someone above the BOT gets a legible refusal instead of a 403, and a
+        moderator asking for an operation they do not hold themselves is
+        refused rather than borrowing the bot's permissions.
+
+        `actor` is the Member, not a string. It used to be a string, which is
+        exactly why the actor's own permissions were never checked: there was
+        nothing to check them on.
         """
         case = Case(
             id=ids.case_id(),
@@ -277,11 +283,13 @@ class ModerationService:
             guild_id=getattr(guild, "id", None),
             subject_id=getattr(subject, "id", None),
             subject_name=getattr(subject, "display_name", "") or "",
-            actor=actor,
+            actor=str(actor),
             correlation_id=ids.correlation_id(),
             operation=operation,
         )
-        verdict = gate_module.check(operation, guild=guild, subject=subject)
+        verdict = gate_module.check(
+            operation, guild=guild, subject=subject, actor=actor
+        )
         if not verdict.allowed:
             case = case.with_(status=CaseStatus.REFUSED, refusal_reason=verdict.reason)
         else:

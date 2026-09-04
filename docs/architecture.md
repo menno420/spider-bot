@@ -106,6 +106,38 @@ in `operations.py` because there is nothing for such a branch to guard.
 `executor_for` returns shadow for anything that is not exactly `"enforce"`, so
 a typo does nothing rather than acting.
 
+### What an adversarial review broke, 2026-09-04
+
+Four independent Opus lanes attacked the committed code with the brief's own
+question — *can an ordinary member make Spider Bot punish someone incorrectly,
+expose private information, create GitHub spam, bypass a permission gate, or
+make a report disappear?* — under the rule that a finding not executed is not a
+finding. Nineteen findings across the four lanes, every one reproduced here
+before it was fixed, and each fix carries a test that fails when the fix is
+removed. The shape of the ones that mattered, because it repeats:
+
+- **The prompt that never ran.** `classifier.SYSTEM` was well written, well
+  tested around, and reached the model on no call ever made. Nothing asserted
+  the system prompt arrived, so the gateway's `mode` dispatch could silently
+  route the moderation call down the chat path for the life of the module.
+- **The field that decided nothing.** `targets_member` and
+  `PublishFailure.retryable` were both collected, stored and cited in
+  docstrings as protections while no code read either.
+- **The two lists that drifted.** The precheck's staff set and the gate's staff
+  set were maintained separately and disagreed, and the disagreement was
+  invisible: one decides whether a message is judged, the other whether the
+  action lands, so a member in the gap got both.
+- **The check that passed by construction.** A report containing pasted abuse
+  satisfies the evidence-quote containment test trivially, so the "one defence
+  that does not rely on the model cooperating" was, for the single most common
+  false positive, no defence at all.
+- **The identifier in a member's hands.** The intake marker is the only
+  backstop against republication and it is a plain string in a typed field.
+
+The common thread is not carelessness in any one place: it is that four of the
+five were *documented* protections. A docstring asserting a property is the
+cheapest possible way to stop looking for its absence.
+
 ### The policy as data
 
 `DEFAULT_POLICY` is a tuple of frozen rules, printable in the mod console.

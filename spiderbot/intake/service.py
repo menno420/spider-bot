@@ -65,6 +65,19 @@ class Outcome:
         return self.stored
 
 
+#: How many reports one member may file in `FILE_WINDOW_S`, across EVERY entry
+#: point — the limit lives here rather than in a cog because this service is
+#: the one thing all of them go through. Far above honest use at this server's
+#: volume (a handful a week across everyone) and far below what it takes to
+#: matter. `MEASURED` 2026-09-04: nothing rate-limited filing anywhere, and the
+#: store is an append-only Discord channel read to a fixed horizon on a cold
+#: start, so ~1000 reports push the oldest records past it and they stop
+#: existing as far as every panel and every retry queue is concerned. A member
+#: typing quickly could make other people's reports disappear.
+FILE_LIMIT = 6
+FILE_WINDOW_S = 3600.0
+
+
 class IntakeService:
     """Reports in, durable records out. Holds a store and a GitHub client.
 
@@ -85,6 +98,13 @@ class IntakeService:
         self._github = github or github_sink.NullGitHubClient()
         self._now = now
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        #: report id -> the issue GitHub created when the store write that
+        #: should have remembered it failed. Process-local and deliberately
+        #: not persisted (persisting is exactly what failed), it stops this
+        #: process turning one report into N public issues across N retries.
+        self._published_unrecorded: dict[str, github_sink.Published] = {}
+        #: reporter user id -> the timestamps of their recent filings.
+        self._recent_filings: dict[int, list[float]] = defaultdict(list)
 
     # -- filing ---------------------------------------------------------------
 
@@ -111,6 +131,23 @@ class IntakeService:
         answered promptly and publication does not sit on the interaction.
         """
         correlation_id = correlation_id or ids.correlation_id()
+        if reporter is not None and not self._may_file(reporter.user_id):
+            audit.stdout_event(
+                "report_rate_limited",
+                correlation_id=correlation_id,
+                category=str(category),
+            )
+            return Outcome(
+                None,
+                stored=False,
+                published=False,
+                failure="rate_limited",
+                reporter_message=(
+                    "That is a lot of reports in a short time - I have stopped "
+                    "writing them down for a bit so the earlier ones do not get "
+                    "buried. Try again in an hour, or ping Menno if it is urgent."
+                ),
+            )
         report = Report(
             id=ids.report_id(),
             category=category,
@@ -233,6 +270,23 @@ class IntakeService:
             if report is None:
                 return Outcome(None, False, False, "", failure="unreadable_record")
 
+            remembered = self._published_unrecorded.get(report.id)
+            if report.github_issue_number is None and remembered is not None:
+                # The issue exists; only the record of it is missing, because
+                # the store write failed after GitHub had already created it.
+                # `MEASURED` 2026-09-04: without this, seven presses of
+                # /retryreports produced seven separate public issues for one
+                # report, all carrying the same intake id, and the report
+                # stayed in the retry queue for the eighth. This memory is
+                # process-local and lost on restart — the marker search is the
+                # backstop that survives one, and it is a backstop, not a
+                # guarantee, which is why this exists as well.
+                report = report.with_(
+                    status=Status.PUBLISHED,
+                    github_issue_number=remembered.number,
+                    github_issue_url=remembered.url,
+                )
+                await self._store.append(store.REPORTS, report.id, report.as_record())
             if report.github_issue_number is not None:
                 return Outcome(
                     report,
@@ -270,12 +324,16 @@ class IntakeService:
                     recorded=written,
                 )
                 if not written:
-                    # The issue exists but we failed to remember it. The marker
-                    # search is exactly the backstop for this, so say so rather
-                    # than leaving a silent inconsistency.
+                    # The issue exists but we failed to remember it. Hold it in
+                    # process memory so this process cannot create a second
+                    # one, and say so loudly: after a restart the marker search
+                    # is the only thing left standing between a retry and a
+                    # duplicate public issue.
+                    self._published_unrecorded[final.id] = result
                     log.error(
-                        "intake: published %s as #%s but could not record it; the "
-                        "marker search will prevent a duplicate on retry",
+                        "intake: published %s as #%s but could not record it; "
+                        "held in memory for this process, and the marker search "
+                        "is the only backstop across a restart",
                         final.id, result.number,
                     )
                 return Outcome(
@@ -285,7 +343,11 @@ class IntakeService:
                     reporter_message=self._published_message(final),
                 )
 
-            failed = pending.with_(status=Status.PUBLISH_FAILED)
+            failed = pending.with_(
+                status=Status.PUBLISH_FAILED,
+                publish_failure=result.reason,
+                publish_failure_retryable=result.retryable,
+            )
             await self._store.append(store.REPORTS, failed.id, failed.as_record())
             audit.stdout_event(
                 "report_publish_failed",
@@ -302,8 +364,27 @@ class IntakeService:
                 reporter_message=(
                     f"Saved as `{failed.id}`. I could not file it on the issue "
                     "tracker just now, so it is queued and I will retry."
+                    if result.retryable
+                    else f"Saved as `{failed.id}`. I could not put it on the "
+                    "issue tracker and retrying will not help, so I have "
+                    "flagged it for Menno instead. The report itself is safe."
                 ),
             )
+
+    def _may_file(self, user_id: int) -> bool:
+        """Record this filing and say whether it is within the limit.
+
+        Deliberately counts ATTEMPTS, not successes: a member whose reports are
+        all failing to store is still driving writes at the channel, which is
+        the thing being limited. Process-local, like every other cooldown here
+        — a restart forgives, which at this volume is the right trade against
+        putting a counter in the store this is protecting.
+        """
+        now = self._now()
+        recent = [t for t in self._recent_filings[user_id] if now - t < FILE_WINDOW_S]
+        recent.append(now)
+        self._recent_filings[user_id] = recent
+        return len(recent) <= FILE_LIMIT
 
     def _published_message(self, report: Report) -> str:
         where = report.github_issue_url or f"issue #{report.github_issue_number}"
@@ -327,11 +408,30 @@ class IntakeService:
 
     async def retry_pending(self, *, limit: int = 10) -> list[Outcome]:
         """One pass over the retry queue. Bounded, so a long outage cannot
-        turn into a burst against GitHub's secondary rate limit when it ends."""
+        turn into a burst against GitHub's secondary rate limit when it ends.
+
+        Oldest first. `pending_publication` is newest-first for the panel, and
+        slicing that meant a queue longer than the limit retried the same
+        newest `limit` reports every pass while the oldest never moved.
+        """
         outcomes = []
-        for report in (await self.pending_publication())[:limit]:
+        queue = sorted(await self.pending_publication(), key=lambda r: r.submitted_at)
+        for report in queue[:limit]:
             outcomes.append(await self.publish(report.id))
         return outcomes
+
+    async def stuck(self) -> list[Report]:
+        """Approved reports a retry can never fix. For the staff panel.
+
+        They are excluded from `pending_publication` by `may_publish`, which
+        is what stops the retry loop — so without this they would simply be
+        invisible, which is the failure the exclusion was meant to prevent.
+        """
+        return [
+            r
+            for r in await self.all_reports()
+            if not r.publish_failure_retryable and r.github_issue_number is None
+        ]
 
     async def mark_resolved(self, report_id: str, resolution: str) -> Report | None:
         report = await self.get(report_id)
