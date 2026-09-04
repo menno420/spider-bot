@@ -376,3 +376,20 @@ def test_only_the_bots_own_messages_are_read_as_records():
     # Positive control: the bot's own row is still read, so the filter is about
     # authorship and not about the decoder having stopped working.
     assert run(fresh.get(store.REPORTS, "SB-R-REAL")) is not None
+
+
+def test_chunks_are_sized_on_the_finished_message_not_the_payload():
+    """Codex, spider-bot#3, 2026-09-04: the payload was sliced at 1,500
+    characters and the slice was then JSON-escaped again as the envelope's
+    value, so 1,500 quotes rendered as a 3,079-character message — past
+    Discord's 2,000 limit. A bug report pasting a log simply failed to store."""
+    for payload in (
+        {"id": "X", "d": '"' * 1400},
+        {"id": "X", "d": "\\" * 4000},
+        {"id": "X", "d": "a" * 1400},
+    ):
+        chunks = store.encode_chunks(store.REPORTS, "X", payload)
+        assert chunks is not None
+        assert max(len(c) for c in chunks) <= store.MAX_MESSAGE_CHARS
+        rebuilt = store.assemble([store.decode_chunk(c) for c in chunks])
+        assert rebuilt["X"] == payload, "and it still round-trips"

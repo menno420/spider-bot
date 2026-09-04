@@ -67,7 +67,16 @@ _FENCE = "```json"
 # Discord caps a message at 2000 characters. The envelope around a chunk costs
 # ~120 for the fence, the keys and JSON escaping of the payload slice; 1500
 # leaves room for a pathological slice where every character escapes to six.
+#: How much SERIALISED payload goes in one chunk, as a starting guess. The
+#: real bound is `MAX_MESSAGE_CHARS` applied to the FINISHED message, and
+#: `encode_chunks` halves this until every rendered chunk fits. Codex,
+#: spider-bot#3, 2026-09-04: the payload was sliced at this width and the
+#: slice was then JSON-escaped again as the envelope's value, so a slice of
+#: quotes or backslashes doubled to ~3,000 characters and Discord refused
+#: the write — a report full of logs or escaped data simply failed to store.
 CHUNK_CHARS = 1500
+#: Discord's own cap, with headroom for the fence the envelope carries.
+MAX_MESSAGE_CHARS = 1900
 # A single record may not exceed this many chunks. 40 x 1500 is 60 KB of one
 # record, far past anything the intake service will accept, and the cap exists
 # so a bug upstream cannot post a hundred messages into a staff channel.
@@ -126,26 +135,47 @@ def encode_chunks(collection: str, key: str, data: dict[str, Any]) -> list[str] 
         # write, which the caller already knows how to report honestly.
         log.exception("store: record for %s/%s could not be encoded", collection, key)
         return None
-    slices = [payload[i : i + CHUNK_CHARS] for i in range(0, len(payload), CHUNK_CHARS)] or [""]
-    if len(slices) > MAX_CHUNKS:
-        log.error(
-            "store: record %s/%s needs %d chunks, cap is %d",
-            collection, key, len(slices), MAX_CHUNKS,
-        )
-        return None
     gen = _generation()
-    out = []
-    for index, part in enumerate(slices):
+
+    def render(part: str, index: int, count: int) -> str:
         envelope = {
             "v": SCHEMA_VERSION,
             "c": collection,
             "k": key,
             "g": gen,
             "i": index,
-            "n": len(slices),
+            "n": count,
             "d": part,
         }
-        out.append(f"{_FENCE}\n{_escape_backticks(envelope)}\n```")
+        return f"{_FENCE}\n{_escape_backticks(envelope)}\n```"
+
+    # Sized on the FINISHED message, not on the payload slice. The slice is
+    # JSON-escaped again as the envelope's value, so a slice made of quotes or
+    # backslashes roughly doubles: Codex, spider-bot#3, 2026-09-04 measured
+    # 1,500 characters of quotes rendering as a 3,079-character message, past
+    # Discord's 2,000 limit — so a bug report pasting a log or escaped data
+    # simply failed to store. Halving until every chunk fits costs at most a
+    # handful of retries and is correct for any content, where any fixed
+    # divisor is a guess about what members type.
+    width = CHUNK_CHARS
+    while True:
+        slices = [payload[i : i + width] for i in range(0, len(payload), width)] or [""]
+        out = [render(part, i, len(slices)) for i, part in enumerate(slices)]
+        if all(len(chunk) <= MAX_MESSAGE_CHARS for chunk in out):
+            break
+        width //= 2
+        if width < 16:
+            log.error(
+                "store: record %s/%s cannot be chunked under %d characters",
+                collection, key, MAX_MESSAGE_CHARS,
+            )
+            return None
+    if len(slices) > MAX_CHUNKS:
+        log.error(
+            "store: record %s/%s needs %d chunks, cap is %d",
+            collection, key, len(slices), MAX_CHUNKS,
+        )
+        return None
     return out
 
 

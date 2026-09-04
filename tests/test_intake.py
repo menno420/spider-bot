@@ -37,6 +37,10 @@ def a_report(**overrides) -> Report:
         submitted_at=time.time(),
         reporter=Reporter(user_id=42, display_name="tester", channel_id=7, message_id=8),
         device="Pixel 7a, Android 15",
+        # A `Report` built directly stands in for one that came through a form
+        # that stated the notice; `reporter_cleared` defaults False on the
+        # dataclass so a forgotten entry point cannot publish.
+        reporter_cleared=True,
     )
     base.update(overrides)
     return Report(**base)
@@ -58,6 +62,11 @@ def file_and_approve(svc, **kw):
     kw.setdefault("category", Category.BUG)
     kw.setdefault("title", "t")
     kw.setdefault("description", "d")
+    # Every real publishable entry point states, before the member types, that
+    # the report may reach a public tracker — so a helper modelling one says so
+    # too. `reporter_cleared` defaults False precisely so a caller that has NOT
+    # told them cannot publish.
+    kw.setdefault("reporter_cleared", True)
     out = run(svc.file(**kw))
     run(svc.approve(out.report.id, by="menno"))
     return out
@@ -660,7 +669,8 @@ def test_the_scanned_set_and_the_published_set_are_the_same_list():
 def test_publication_needs_a_named_human():
     svc = a_service(FakeGitHub())
     out = run(svc.file(category=Category.BUG, title="Freeze",
-                       description="It froze when I released the silk."))
+                       description="It froze when I released the silk.",
+                       reporter_cleared=True))
     assert out.report.sensitivity is Sensitivity.PUBLIC_SAFE
     assert not out.report.may_publish, "public-safe is not the same as cleared"
     approved = run(svc.approve(out.report.id, by="menno"))
@@ -682,8 +692,10 @@ def test_a_private_report_cannot_be_approved_into_publication():
 
 def test_the_owner_queue_shows_what_is_waiting_for_a_decision():
     svc = a_service(FakeGitHub())
-    a = run(svc.file(category=Category.BUG, title="a", description="It froze."))
-    run(svc.file(category=Category.COMPLAINT, title="b", description="He insulted me."))
+    a = run(svc.file(category=Category.BUG, title="a", description="It froze.",
+                     reporter_cleared=True))
+    run(svc.file(category=Category.COMPLAINT, title="b", description="He insulted me.",
+                 reporter_cleared=True))
     waiting = run(svc.awaiting_approval())
     assert [r.id for r in waiting] == [a.report.id], "only public-safe, only unapproved"
     run(svc.approve(a.report.id, by="menno"))
@@ -809,7 +821,8 @@ def test_one_member_cannot_flood_the_store():
     svc = a_service()
     reporter = Reporter(user_id=42)
     outcomes = [
-        run(svc.file(category=Category.BUG, title="t", description="d", reporter=reporter))
+        run(svc.file(category=Category.BUG, title="t", description="d",
+                     reporter=reporter, reporter_cleared=True))
         for _ in range(intake_service.FILE_LIMIT + 3)
     ]
     assert sum(1 for o in outcomes if o.ok) == intake_service.FILE_LIMIT
@@ -1042,6 +1055,7 @@ def test_publish_shows_the_whole_issue_body_before_anything_is_posted():
             title="Swing physics break above 3 km",
             description="the reel snaps and the CONSPICUOUS PHRASE appears",
             reporter=Reporter(user_id=42),
+            reporter_cleared=True,
         )
     )
     cog = _publish_cog(svc)
@@ -1049,10 +1063,16 @@ def test_publish_shows_the_whole_issue_body_before_anything_is_posted():
     run(cog.publish.callback(cog, interaction, out.report.id))
 
     assert github.created == [], "nothing is posted by asking to publish"
-    [embed] = interaction.embeds
-    assert "CONSPICUOUS PHRASE" in embed.description, "the approver must see the body"
-    assert out.report.public_title() in embed.description
-    assert "from-spider-bot" in embed.description  # and the labels
+    shown = " ".join(e.description for e in interaction.embeds)
+    assert "CONSPICUOUS PHRASE" in shown, "the approver must see the body"
+    assert out.report.public_title() in shown
+    # Every character of the body reaches the approver, not a prefix of it.
+    assert out.report.public_body() in shown.replace("\n\n", "\n\n")
+    said = " ".join(
+        str(content or kw.get("content") or "")
+        for content, kw in interaction.followup.messages
+    )
+    assert "from-spider-bot" in said  # and the labels
 
     # And the confirm button is what publishes.
     view = interaction.followup.messages[-1][1]["view"]
@@ -1070,9 +1090,11 @@ def test_a_report_reclassified_between_preview_and_press_is_not_published():
     svc = a_service(github)
     out = run(
         svc.file(category=Category.BUG, title="t", description="d",
-                 reporter=Reporter(user_id=42))
+                 reporter=Reporter(user_id=42), reporter_cleared=True)
     )
-    view = intake_cog.PublishPreview(FakeUser(1, "Menno"), out.report.id)
+    view = intake_cog.PublishPreview(
+        FakeUser(1, "Menno"), out.report.id, intake_cog.body_digest(out.report)
+    )
 
     private = out.report.with_(sensitivity=Sensitivity.PRIVATE)
     run(svc._store.append(store.REPORTS, private.id, private.as_record()))
@@ -1102,3 +1124,118 @@ def test_a_fullwidth_spelling_is_scanned_as_the_word_a_reader_sees():
     # so the fold widened what is CAUGHT rather than flagging everything.
     ordinary = a_report(description="the reel snaps above 3 km on my Pixel")
     assert privacy.classify(ordinary).sensitivity is Sensitivity.PUBLIC_SAFE
+
+
+# -- what Codex found at 197ae25 ----------------------------------------------
+
+
+def test_a_long_body_is_previewed_whole_across_several_messages():
+    """Codex, spider-bot#3, 2026-09-04: the preview stopped at 3,000 characters
+    and the button published the whole body, so member-controlled text in the
+    tail reached GitHub unread — the approve-by-id defect one layer in."""
+    github = FakeGitHub()
+    svc = a_service(github)
+    tail = "THE TAIL NOBODY READ"
+    out = run(
+        svc.file(
+            category=Category.BUG,
+            title="long one",
+            description="A" * 3500 + " " + tail,
+            reporter=Reporter(user_id=42),
+            reporter_cleared=True,
+        )
+    )
+    cog = _publish_cog(svc)
+    interaction = FakeInteraction(guild=None, user=FakeUser(1, "Menno"))
+    run(cog.publish.callback(cog, interaction, out.report.id))
+
+    shown = "".join(e.description for e in interaction.embeds)
+    assert tail in shown, "the tail must reach the approver too"
+    assert len(interaction.embeds) > 1, "and it takes more than one message"
+
+
+def test_a_body_that_changed_after_the_preview_is_not_published():
+    """The digest pins WHAT was read, not just that something was."""
+    github = FakeGitHub()
+    svc = a_service(github)
+    out = run(
+        svc.file(category=Category.BUG, title="t", description="the original text",
+                 reporter=Reporter(user_id=42), reporter_cleared=True)
+    )
+    view = intake_cog.PublishPreview(
+        FakeUser(1, "Menno"), out.report.id, intake_cog.body_digest(out.report)
+    )
+    edited = run(svc.get(out.report.id)).with_(description="something else entirely")
+    run(svc._store.append(store.REPORTS, edited.id, edited.as_record()))
+
+    interaction = FakeInteraction(guild=None, user=FakeUser(1, "Menno"))
+    interaction.client = _Bot(svc)
+    run(view.confirm.callback(interaction))
+    assert github.created == []
+    assert "has changed since you read it" in " ".join(
+        str(kw.get("content", "")) for kw in interaction.response.edits
+    )
+
+
+def test_an_html_anchor_is_broken_like_a_markdown_link():
+    """GitHub renders a permitted subset of raw HTML, and `<a href>` is in it —
+    so an anchor tag is a masked link the markdown break does not see."""
+    evil = '<a href="https://evil.example/apk">official tester link</a>'
+    out = redact.for_github(evil)
+    assert "<a href" not in out
+    assert "official tester link" in out  # still readable, still reportable
+    for tag in ("<img src=x>", "<details>", "<video src=x>"):
+        assert redact.ZERO_WIDTH in redact.for_github(tag), tag
+    # Positive control: `<` in ordinary prose is untouched.
+    assert redact.for_github("the drop is < 3 km and a<b") == "the drop is < 3 km and a<b"
+
+
+def test_a_report_from_an_entry_point_that_said_nothing_cannot_be_published():
+    """`reporter_cleared` defaults False. Codex, spider-bot#3, 2026-09-04: it
+    defaulted True on the argument that submitting a form IS the agreement,
+    while no form said so before submission and the receipt mentioned it only
+    after the report was already marked cleared."""
+    svc = a_service(FakeGitHub())
+    quiet = run(svc.file(category=Category.BUG, title="t", description="d"))
+    assert not quiet.report.reporter_cleared
+    assert not quiet.report.is_public_safe
+    assert run(svc.awaiting_approval()) == []
+    # Positive control: an entry point that DID say so produces a queued report.
+    told = run(svc.file(category=Category.BUG, title="t", description="d",
+                        reporter_cleared=True))
+    assert [r.id for r in run(svc.awaiting_approval())] == [told.report.id]
+
+
+def test_the_publishable_forms_say_so_before_the_member_types():
+    """The default above is only honest if the entry points that set it True
+    have actually told the member."""
+    from spiderbot.ui import forms
+
+    for modal in (forms.FeedbackModal, forms.BugReportModal, forms.IdeaModal):
+        placeholders = " ".join(
+            str(getattr(item, "placeholder", "") or "")
+            for item in modal.__dict__.values()
+            if hasattr(item, "placeholder")
+        )
+        assert forms.PUBLIC_NOTICE in placeholders, modal.__name__
+    # And the one that is never publishable does NOT say it, because telling
+    # someone their private message might be published would be false.
+    complaint = " ".join(
+        str(getattr(item, "placeholder", "") or "")
+        for item in forms.ComplaintModal.__dict__.values()
+        if hasattr(item, "placeholder")
+    )
+    assert forms.PUBLIC_NOTICE not in complaint
+
+
+def test_the_report_dataclass_itself_defaults_to_uncleared():
+    """Two defaults guard this — `IntakeService.file`'s parameter and the
+    dataclass field — and a test that only exercises the service would pass
+    with the dataclass wrong. Both are the same rule: a report nobody told the
+    member about is private."""
+    bare = Report(
+        id="SB-R-BARE", category=Category.BUG, title="t", description="d",
+        submitted_at=time.time(),
+    )
+    assert bare.reporter_cleared is False
+    assert not bare.is_public_safe

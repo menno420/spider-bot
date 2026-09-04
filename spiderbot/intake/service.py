@@ -123,6 +123,11 @@ class IntakeService:
         ai_summary: str = "",
         ai_tags: tuple[str, ...] = (),
         ai_says_private: bool | None = None,
+        #: Whether this entry point told the member, BEFORE they typed, that
+        #: their report may reach a public tracker. Default False: a caller
+        #: that has not said so has not obtained consent, and `may_publish`
+        #: cites this field by name.
+        reporter_cleared: bool = False,
         correlation_id: str = "",
     ) -> Outcome:
         """File one report. Store first; publication is a separate step.
@@ -163,6 +168,7 @@ class IntakeService:
             evidence_format=evidence_format,
             ai_summary=ai_summary.strip(),
             ai_tags=ai_tags,
+            reporter_cleared=reporter_cleared,
             status=Status.DRAFT,
         )
         report = privacy.apply(report, ai_says_private=ai_says_private)
@@ -232,6 +238,21 @@ class IntakeService:
             # The classifier's judgement still binds a human here: it is a
             # sorter, and a private report needs re-categorising rather than
             # waving through, so that the reason is recorded either way.
+            #
+            # It returns the report UNCHANGED, which is a silent no-op to read
+            # by accident — so the audit line says what happened and names the
+            # condition that failed. Callers reach this only after checking
+            # `is_public_safe` themselves (`/publish` says why); a caller that
+            # did not check gets a report whose `approved_by` is still empty,
+            # and `may_publish` refuses it.
+            audit.stdout_event(
+                "report_approval_refused",
+                report_id=report.id,
+                correlation_id=report.correlation_id,
+                by=by,
+                reporter_cleared=report.reporter_cleared,
+                sensitivity=str(report.sensitivity),
+            )
             return report
         approved = report.with_(approved_by=by)
         await self._store.append(store.REPORTS, approved.id, approved.as_record())

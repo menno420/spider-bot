@@ -30,7 +30,7 @@ from spiderbot.ai import safety
 from spiderbot.moderation import gate as gate_module
 from spiderbot.moderation import operations, prechecks
 from spiderbot.moderation.cases import Case, CaseStatus, Mode, ReviewOutcome, Source
-from spiderbot.moderation.contracts import Operation
+from spiderbot.moderation.contracts import MUTATING_OPERATIONS, Operation
 from spiderbot.moderation.policy import Policy
 
 log = logging.getLogger("spiderbot.moderation")
@@ -151,7 +151,16 @@ class ModerationService:
     async def _resolve(self, case: Case, decision, *, message, subject) -> Case:
         """Gate, then execute. Nothing here is reachable in shadow mode except
         the gate, whose verdict is worth recording either way — knowing that an
-        action WOULD have been refused is part of evaluating the policy."""
+        action WOULD have been refused is part of evaluating the policy.
+
+        **The case is written BEFORE anything mutates.** Codex, spider-bot#3,
+        2026-09-04: the executor ran and `_record` came after it, so a case
+        channel that was full, unwritable or slow produced a member-visible
+        timeout with no case behind it — invisible to `/home` → Cases and to
+        every review. An action nobody can review is worse than an action not
+        taken, so a mutating operation whose pending write fails does not
+        happen at all.
+        """
         if decision.operation is Operation.NOTHING:
             return case.with_(status=CaseStatus.OPEN, performed=Operation.NOTHING)
 
@@ -175,6 +184,24 @@ class ModerationService:
                 performed=Operation.NOTHING,
                 notes=(*case.notes, "waiting on a moderator"),
             )
+
+        if self._executor.enforcing and decision.operation in MUTATING_OPERATIONS:
+            pending = case.with_(
+                status=CaseStatus.OPEN, notes=(*case.notes, "about to act")
+            )
+            if not await self._store.append(store.CASES, pending.id, pending.as_record()):
+                audit.stdout_event(
+                    "moderation_refused",
+                    case_id=case.id,
+                    correlation_id=case.correlation_id,
+                    operation=str(decision.operation),
+                    reason="the case could not be recorded, so nothing was done",
+                    missing_permission=None,
+                )
+                return case.with_(
+                    status=CaseStatus.REFUSED,
+                    refusal_reason="the case could not be recorded, so nothing was done",
+                )
 
         outcome = await self._executor.perform(
             decision.operation,

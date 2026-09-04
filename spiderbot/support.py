@@ -348,9 +348,13 @@ class SupportFeed:
 
         raw, problem = await self._fetch()
         if raw is None:
-            # Last-known-good, then built-in. Either way the staleness line
-            # changes, so the bot's answer is honest about its own freshness.
-            if self._facts.live:
+            # Last-known-good for as long as the outage lasts. Codex,
+            # spider-bot#3, 2026-09-04: this branched on `live`, and a CACHED
+            # fact is not live — so the FIRST failure demoted the real feed to
+            # cached and the SECOND replaced it with the empty built-in block.
+            # A continuing outage kept useful facts for exactly one retry.
+            # `build_version` is the tell: anything ever fetched has one.
+            if self._facts.build_version:
                 self._facts = SupportFacts(
                     **{**self._facts.__dict__, "source": Source.CACHED, "problem": problem}
                 )
@@ -378,7 +382,18 @@ class SupportFeed:
             ) as response:
                 if response.status != 200:
                     return None, f"feed returned HTTP {response.status}"
-                return await response.text(), ""
+                # Read at most MAX_BYTES + 1 rather than materialising the
+                # whole body and checking the cap afterwards. Codex,
+                # spider-bot#3, 2026-09-04: `response.text()` allocated
+                # whatever the endpoint sent, so the advertised 256 KiB cap
+                # protected the parser and not the worker's memory.
+                body = await response.content.read(MAX_BYTES + 1)
+                if len(body) > MAX_BYTES:
+                    return None, "feed is implausibly large"
+                try:
+                    return body.decode("utf-8"), ""
+                except UnicodeDecodeError:
+                    return None, "feed is not valid UTF-8"
         except (aiohttp.ClientError, TimeoutError) as exc:
             return None, f"feed unreachable: {type(exc).__name__}"
         except Exception as exc:  # never take a question down with the feed

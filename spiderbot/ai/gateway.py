@@ -145,6 +145,7 @@ class Gateway:
         *,
         mode: str,
         system: str | None = None,
+        model: str | None = None,
         timeout_s: float = 45.0,
     ) -> AIResult:
         """One bounded completion over pre-wrapped payload text.
@@ -153,6 +154,12 @@ class Gateway:
         "moderation" brings its own system prompt and its own final operator
         instruction, and its output is not trimmed to a Discord message length.
         An unknown mode is refused. Never raises.
+
+        `model` overrides `AI_MODEL` for this one call. Codex, spider-bot#3,
+        2026-09-04: `MOD_MODEL` was loaded into config, printed in `/status`,
+        and read by nothing — an operator pointing moderation at a cheaper or
+        separately-evaluated model got the chat model regardless, with the
+        configuration implying otherwise.
         """
         if self._client is None:
             return AIResult(None, "disabled")
@@ -173,7 +180,7 @@ class Gateway:
         try:
             response = await asyncio.wait_for(
                 self._client.messages.create(
-                    model=self._cfg.ai_model,
+                    model=model or self._cfg.ai_model,
                     max_tokens=self._cfg.ai_max_response_tokens,
                     system=self._system_blocks(system),
                     output_config={"effort": self._cfg.ai_effort},

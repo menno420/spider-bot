@@ -189,8 +189,14 @@ class HttpGitHubClient:
             # before treating this issue as the report's existing projection —
             # otherwise a member who wrote another report's id into their own
             # text makes that report resolve to THIS issue and disappear.
+            # A STRING containing the marker, not "not a string that lacks
+            # it". Codex, spider-bot#3, 2026-09-04: an item with a null or
+            # missing `body` slipped through the earlier form and was accepted
+            # as the existing projection on its number alone, so a partial or
+            # malformed 200 could mark a report published against an issue
+            # whose body was never checked.
             body = item.get("body")
-            if isinstance(body, str) and marker not in body:
+            if not isinstance(body, str) or marker not in body:
                 continue
             try:
                 return Published(int(item["number"]), str(item.get("html_url") or ""))

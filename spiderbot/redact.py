@@ -90,6 +90,14 @@ _MINTED_ID = re.compile(r"\bSB-([A-Z]{1,2})-([0-9A-Z]{4,12})-([0-9A-Z]{4,10})\b"
 #: as a live link in a public issue and inside the bot's own embed.
 #: A BARE url is deliberately left alone: it shows a reader where it goes.
 _MASKED_LINK = re.compile(r"\](\s*[\(\[])")
+#: GitHub renders a permitted subset of raw HTML, and `<a href>` is in it —
+#: so an anchor tag is a masked link that the markdown break above does not
+#: see. Codex, spider-bot#3, 2026-09-04: `<a href="https://evil.example/apk">
+#: official tester link</a>` passed `for_github` byte-identical. The whole
+#: tag family is broken rather than just anchors: `<img>` fetches, `<video>`
+#: and `<details>` hide text from the reader, and none of them is something
+#: a member typing a bug report needs.
+_HTML_TAG = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9]*)(?=[\s/>])")
 
 
 def clean(text: str, *, limit: int | None = None) -> str:
@@ -139,13 +147,17 @@ def for_github(text: str, *, limit: int | None = None) -> str:
     body, so a member could hide everything after their own text from the
     developer reading it. Cheap to prevent, invisible when it does not apply.
 
-    And a MASKED link is broken: `[anchor](target)` is the one construct where
-    the words a reader sees and the place they go are chosen independently. A
-    bare URL is left alone on purpose - it tells the reader where it goes.
+    And a MASKED link is broken in BOTH of its spellings: `[anchor](target)`
+    and `<a href="target">anchor</a>`, because GitHub renders a permitted
+    subset of raw HTML and an anchor tag is in it. Those are the constructs
+    where the words a reader sees and the place they go are chosen
+    independently. A bare URL is left alone on purpose - it tells the reader
+    where it goes.
     """
     broken = _GITHUB_SIGIL.sub(rf"\1{ZERO_WIDTH}", clean(text, limit=limit))
     broken = _MINTED_ID.sub(rf"SB{ZERO_WIDTH}-\1-\2-\3", broken)
     broken = _MASKED_LINK.sub(rf"]{ZERO_WIDTH}\1", broken)
+    broken = _HTML_TAG.sub(rf"<{ZERO_WIDTH}\1\2", broken)
     return _FENCE_RUN.sub("'''", broken)
 
 

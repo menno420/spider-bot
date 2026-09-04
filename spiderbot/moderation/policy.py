@@ -346,7 +346,38 @@ def validate(rules: tuple[PolicyRule, ...] = DEFAULT_POLICY) -> list[str]:
                     "above it already matches everything it would"
                 )
                 break
+
+    for index, rule in enumerate(rules):
+        if (
+            rule.operation in MUTATING_OPERATIONS
+            and rule.categories
+            and rule.categories <= PERSON_DIRECTED
+            and not rule.requires_targeting
+        ):
+            problems.append(
+                f"rule {index} ({rule.operation}) mutates on person-directed "
+                "categories without requires_targeting: it would act on a "
+                'verdict that says "not aimed at anyone"'
+            )
     return problems
+
+
+#: Categories that are, by definition, conduct aimed at a person. A rule that
+#: MUTATES on one of these and does not require targeting is a rule that can
+#: act on a verdict explicitly saying "not aimed at anyone" — which is the
+#: defect `requires_targeting` was added to close, so `validate()` refuses to
+#: let a later policy edit reopen it. Codex, spider-bot#3, 2026-09-04: the
+#: field narrowed the shipped table and nothing stopped the next edit widening
+#: it again.
+PERSON_DIRECTED: frozenset[Category] = frozenset(
+    {
+        Category.HARASSMENT,
+        Category.TARGETED_HOSTILITY,
+        Category.PERSONAL_ATTACK,
+        Category.HATE,
+        Category.SEXUAL_HARASSMENT,
+    }
+)
 
 
 def _shadows(earlier: PolicyRule, later: PolicyRule) -> bool:

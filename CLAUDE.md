@@ -276,6 +276,29 @@ structural change - that plan outranks preferences you arrive with.
     at press time. A preview that paraphrases is the same failure as a
     title-only queue.
 
+46. **Consent is stated before the member types, and the field defaults to
+    FALSE.** `reporter_cleared` used to default True on the argument that
+    submitting a form IS the agreement — while no form said so before
+    submission and the receipt mentioned it only afterwards. A default that
+    asserts consent nobody gave is worse than no field, because `may_publish`
+    cites it by name. Every entry point that sets it True carries
+    `forms.PUBLIC_NOTICE` where the member reads it first; the complaint form
+    deliberately does not, because a complaint is never publishable and saying
+    otherwise would be false.
+
+47. **A mutating operation is recorded before it happens.** The executor used
+    to run and the case write came after, so a full or unwritable case channel
+    produced a member-visible timeout with no case behind it — invisible to the
+    review queue and to any later question about why. An action nobody can
+    review is worse than an action not taken. Shadow mode is exempt: it changes
+    nothing a member sees, so a store outage must not turn it into refusals.
+
+48. **The verify gate covers the invariants themselves, not just the code.**
+    `policy.validate()` now refuses a mutating rule on person-directed
+    categories that does not require targeting — invariant 29 as a check rather
+    than as a habit, because the shipped table satisfying a rule says nothing
+    about the next edit.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

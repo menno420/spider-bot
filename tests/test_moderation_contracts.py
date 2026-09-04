@@ -296,6 +296,10 @@ def test_the_validator_does_not_flag_rules_with_disjoint_categories():
             min_severity=Severity.MEDIUM,
             min_confidence=0.85,
             categories=frozenset({Category.HARASSMENT}),
+            # Required by `validate()` for any mutating rule on a
+            # person-directed category — this fixture is about shadowing, so
+            # it satisfies the other invariant rather than tripping it.
+            requires_targeting=True,
         ),
     )
     assert P.validate(fine) == []
@@ -470,3 +474,61 @@ def test_a_targeting_rule_cannot_shadow_a_general_one():
         broad,
     )
     assert P.validate(P.DEFAULT_POLICY) == []
+
+
+def test_the_validator_refuses_a_person_directed_rule_without_targeting():
+    """Codex, spider-bot#3, 2026-09-04: `requires_targeting` narrowed the
+    shipped table and nothing stopped the next edit widening it again — a
+    routine policy change could reintroduce a rule that acts on a verdict
+    saying "not aimed at anyone"."""
+    loose = (
+        P.PolicyRule(
+            operation=Operation.TIMEOUT_SHORT,
+            min_severity=Severity.HIGH,
+            min_confidence=0.90,
+            categories=frozenset({Category.HARASSMENT}),
+        ),
+    )
+    problems = P.validate(loose)
+    assert any("requires_targeting" in p for p in problems), problems
+
+    # Two positive controls. The same rule WITH targeting is accepted...
+    assert P.validate(
+        (
+            P.PolicyRule(
+                operation=Operation.TIMEOUT_SHORT,
+                min_severity=Severity.HIGH,
+                min_confidence=0.90,
+                categories=frozenset({Category.HARASSMENT}),
+                requires_targeting=True,
+            ),
+        )
+    ) == []
+    # ...and a NON-mutating rule on the same categories does not need it, since
+    # flagging a case for a human is not acting on anyone.
+    assert P.validate(
+        (
+            P.PolicyRule(
+                operation=Operation.FLAG_FOR_REVIEW,
+                min_severity=Severity.MEDIUM,
+                min_confidence=0.60,
+                categories=frozenset({Category.HARASSMENT}),
+                requires_human=True,
+            ),
+        )
+    ) == []
+
+
+def test_a_scam_rule_does_not_need_targeting():
+    """The invariant is about conduct toward people. A fake tester link harms
+    whoever clicks it and is aimed at nobody in particular."""
+    assert P.validate(
+        (
+            P.PolicyRule(
+                operation=Operation.DELETE_MESSAGE,
+                min_severity=Severity.HIGH,
+                min_confidence=0.90,
+                categories=frozenset({Category.SCAM}),
+            ),
+        )
+    ) == []

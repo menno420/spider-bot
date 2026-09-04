@@ -165,9 +165,11 @@ class Classifier:
     which the policy engine consumes; it cannot cause anything to happen.
     """
 
-    def __init__(self, gateway, *, timeout_s: float = 20.0, nonce=None) -> None:
+    def __init__(self, gateway, *, timeout_s: float = 20.0, model: str = "", nonce=None) -> None:
         self._gateway = gateway
         self._timeout_s = timeout_s
+        #: `MOD_MODEL`, or empty to use the shared `AI_MODEL`.
+        self._model = model
         #: Injectable so a test can pin the token; never for production use.
         self._nonce = nonce or (lambda: secrets.token_hex(4).upper())
 
@@ -208,6 +210,7 @@ class Classifier:
             ),
             mode="moderation",
             system=SYSTEM,
+            model=self._model or None,
             timeout_s=self._timeout_s,
         )
         latency_ms = int((time.monotonic() - started) * 1000)

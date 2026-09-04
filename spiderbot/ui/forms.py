@@ -27,6 +27,7 @@ import discord
 
 from spiderbot import audit, style
 from spiderbot.intake.models import Category, Reporter
+from spiderbot.ui.safe import safe_defer, safe_followup
 
 log = logging.getLogger("spiderbot.ui.forms")
 
@@ -69,6 +70,10 @@ async def file_report(
         reporter=reporter_from(interaction),
         device=device,
         repro_steps=repro_steps,
+        # Set here because every form that reaches this function carries
+        # `PUBLIC_NOTICE` in the field the member reads before they type. A
+        # caller that has not shown it must not pass this.
+        reporter_cleared=True,
     )
 
 
@@ -107,6 +112,14 @@ def _receipt_embed(bot, verb: str, receipt: str) -> discord.Embed:
     )
 
 
+#: Shown in a placeholder on every form whose report can become a public
+#: GitHub issue, so the member reads it BEFORE they type rather than in the
+#: receipt afterwards. `ComplaintModal` deliberately does not carry it: a
+#: complaint is never publishable at all, and telling someone their private
+#: message might be published would be false.
+PUBLIC_NOTICE = "Menno may put this on the game's public issue tracker."
+
+
 class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
     summary = discord.ui.TextInput(
         label="One-line summary",
@@ -117,7 +130,10 @@ class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
         label="Details",
         style=discord.TextStyle.paragraph,
         max_length=1500,
-        placeholder="What happened / what you expected / device and Android version if relevant",
+        placeholder=(
+            "What happened / what you expected / device and Android version. "
+            + PUBLIC_NOTICE
+        ),
     )
 
     def __init__(self, bot) -> None:
@@ -125,6 +141,13 @@ class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+
+        # Defer FIRST: the store write below can take a cold history
+        # scan on the first submission after a deploy, and Discord kills
+        # the interaction token at 3 seconds — the report lands and the
+        # member sees "interaction failed" and files it again.
+        if not await safe_defer(interaction, ephemeral=True):
+            return
         body = (
             f"{self.details.value}\n\n*Submitted by {interaction.user.display_name} "
             f"via the feedback form*"
@@ -139,7 +162,8 @@ class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
         receipt = await _deliver(
             self.bot, "feedback", str(self.summary.value), body, interaction.user
         )
-        await interaction.response.send_message(
+        await safe_followup(
+            interaction,
             embed=_receipt_embed(
                 self.bot, "Feedback sent", receipt_for(outcome, receipt)
             ),
@@ -173,7 +197,10 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         style=discord.TextStyle.paragraph,
         max_length=800,
         required=False,
-        placeholder="Smaller steps are better - it is how a bug gets reproduced.",
+        placeholder=(
+            "Smaller steps are better - it is how a bug gets reproduced. "
+            + PUBLIC_NOTICE
+        ),
     )
 
     def __init__(self, bot) -> None:
@@ -181,6 +208,13 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+
+        # Defer FIRST: the store write below can take a cold history
+        # scan on the first submission after a deploy, and Discord kills
+        # the interaction token at 3 seconds — the report lands and the
+        # member sees "interaction failed" and files it again.
+        if not await safe_defer(interaction, ephemeral=True):
+            return
         steps = str(self.steps.value or "").strip() or "(not given)"
         body = (
             f"**Device:** {self.device.value}\n\n"
@@ -200,7 +234,8 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         receipt = await _deliver(
             self.bot, "bug-reports", str(self.summary.value), body, interaction.user
         )
-        await interaction.response.send_message(
+        await safe_followup(
+            interaction,
             embed=_receipt_embed(
                 self.bot, "Bug reported", receipt_for(outcome, receipt)
             ),
@@ -272,7 +307,10 @@ class IdeaModal(discord.ui.Modal, title="Share an idea"):
         label="What is the idea, and why?",
         style=discord.TextStyle.paragraph,
         max_length=1500,
-        placeholder="What it would change, and what problem it solves for you.",
+        placeholder=(
+            "What it would change, and what problem it solves for you. "
+            + PUBLIC_NOTICE
+        ),
     )
 
     def __init__(self, bot) -> None:
@@ -280,6 +318,13 @@ class IdeaModal(discord.ui.Modal, title="Share an idea"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+
+        # Defer FIRST: the store write below can take a cold history
+        # scan on the first submission after a deploy, and Discord kills
+        # the interaction token at 3 seconds — the report lands and the
+        # member sees "interaction failed" and files it again.
+        if not await safe_defer(interaction, ephemeral=True):
+            return
         outcome = await file_report(
             self.bot,
             interaction,
@@ -294,7 +339,8 @@ class IdeaModal(discord.ui.Modal, title="Share an idea"):
         receipt = await _deliver(
             self.bot, "feedback", str(self.summary.value), body, interaction.user
         )
-        await interaction.response.send_message(
+        await safe_followup(
+            interaction,
             embed=_receipt_embed(self.bot, "Idea saved", receipt_for(outcome, receipt)),
             ephemeral=True,
         )
@@ -334,6 +380,13 @@ class ComplaintModal(discord.ui.Modal, title="Tell Menno something"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+
+        # Defer FIRST: the store write below can take a cold history
+        # scan on the first submission after a deploy, and Discord kills
+        # the interaction token at 3 seconds — the report lands and the
+        # member sees "interaction failed" and files it again.
+        if not await safe_defer(interaction, ephemeral=True):
+            return
         outcome = await file_report(
             self.bot,
             interaction,
@@ -354,7 +407,8 @@ class ComplaintModal(discord.ui.Modal, title="Tell Menno something"):
             ),
             style.WARNING,
         )
-        await interaction.response.send_message(
+        await safe_followup(
+            interaction,
             embed=_receipt_embed(
                 self.bot,
                 "Sent privately",

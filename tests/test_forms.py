@@ -61,7 +61,9 @@ def test_the_feedback_receipt_starts_with_a_verb():
     bot = build()
     interaction = FakeInteraction(FakeGuild())
     submit(FeedbackModal(bot), interaction, summary="s", details="d")
-    (_content, kwargs) = interaction.response.messages[0]
+    # The modals defer before touching the store, so their receipt is a
+    # followup rather than an initial response.
+    (_content, kwargs) = interaction.followup.messages[0]
     embed = kwargs["embed"]
     assert embed.title.endswith("Feedback sent"), embed.title
     assert kwargs["ephemeral"] is True
@@ -105,7 +107,7 @@ def test_the_bug_receipt_starts_with_a_verb():
     bot = build()
     interaction = FakeInteraction(FakeGuild())
     submit(BugReportModal(bot), interaction, summary="s", device="d", details="x", steps="")
-    assert interaction.response.messages[0][1]["embed"].title.endswith("Bug reported")
+    assert interaction.followup.messages[0][1]["embed"].title.endswith("Bug reported")
 
 
 # -- the two things that must never break -----------------------------------
@@ -130,7 +132,7 @@ def test_a_missing_channel_falls_back_to_mod_log_rather_than_losing_it(
     interaction = FakeInteraction(FakeGuild())
     submit(modal(bot), interaction, **values)
     assert bot.channels["mod-log"].sent, "a report must never be silently dropped"
-    assert interaction.response.messages, "and the member is still told it arrived"
+    assert interaction.followup.messages, "and the member is still told it arrived"
 
 
 @pytest.mark.parametrize(

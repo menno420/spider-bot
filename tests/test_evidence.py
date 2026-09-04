@@ -505,3 +505,34 @@ def test_the_refresh_interval_is_not_dead_configuration():
     # Positive control: with no URL configured there is nothing to be due for.
     object.__setattr__(cfg, "support_feed_url", "")
     assert not support.SupportFeed(cfg, now=lambda: clock[0]).due
+
+
+def test_cached_support_facts_survive_a_continuing_outage():
+    """Codex, spider-bot#3, 2026-09-04: the branch tested `live`, and a CACHED
+    fact is not live — so the first failure demoted the real feed to cached and
+    the SECOND replaced it with the empty built-in block. A continuing outage
+    kept useful facts for exactly one retry."""
+    import asyncio
+
+    from conftest import make_cfg
+
+    cfg = make_cfg()
+    object.__setattr__(cfg, "support_feed_url", "https://example/feed.json")
+    feed = support.SupportFeed(cfg)
+    feed._facts = support.SupportFacts(source=support.Source.FEED, build_version="0.45.0")
+
+    async def dead():
+        return None, "HTTP 500"
+
+    feed._fetch = dead
+    for _ in range(5):
+        facts = asyncio.run(feed.refresh())
+    assert facts.source is support.Source.CACHED
+    assert facts.build_version == "0.45.0"
+    assert "HTTP 500" in facts.staleness()
+
+    # Positive control: with nothing ever fetched there is nothing to keep, and
+    # the built-in block is the honest answer.
+    fresh = support.SupportFeed(cfg)
+    fresh._fetch = dead
+    assert asyncio.run(fresh.refresh()).source is support.Source.BUILT_IN

@@ -72,7 +72,6 @@ class Precheck:
 #: almost always "lol" or an emoji. Cheap and it removes most traffic.
 MIN_LENGTH = 12
 
-_COMMANDISH = ("/", "!", "?", ".", "-")
 _LINK = re.compile(r"https?://", re.IGNORECASE)
 
 
@@ -105,8 +104,6 @@ def should_analyse(
     content = (getattr(message, "content", "") or "").strip()
     if not content:
         return Precheck.skip("no text to judge")
-    if content.startswith(_COMMANDISH):
-        return Precheck.skip("looks like a command")
     if len(content) < MIN_LENGTH and not _LINK.search(content):
         return Precheck.skip("too short to judge")
 

@@ -63,6 +63,32 @@ class SpiderBot(commands.Bot):
         self.intake: IntakeService | None = None
         self.moderation: ModerationService | None = None
 
+    @tasks.loop(minutes=30)
+    async def _retry_publications(self) -> None:
+        """Push queued reports at GitHub without waiting for a moderator.
+
+        Codex, spider-bot#3, 2026-09-04: the receipt promises "it is queued and
+        I will retry" and the Reports panel says approved reports retry
+        automatically — while the only caller of `retry_pending` was the manual
+        `/retryreports` command. A GitHub outage therefore left approved
+        reports queued indefinitely unless someone happened to run it, and both
+        surfaces said otherwise.
+        """
+        if self.intake is None:
+            return
+        outcomes = await self.intake.retry_pending()
+        if outcomes:
+            audit.stdout_event(
+                "retry_pass",
+                attempted=len(outcomes),
+                published=sum(1 for o in outcomes if o.published),
+            )
+
+    @_retry_publications.error
+    async def _retry_publications_failed(self, exc: BaseException) -> None:
+        log.exception("publication retry loop failed; restarting", exc_info=exc)
+        self._retry_publications.restart()
+
     @tasks.loop(minutes=5)
     async def _support_refresh(self) -> None:
         """Keep the game facts current while the worker runs.
@@ -151,6 +177,8 @@ class SpiderBot(commands.Bot):
         await self.support.refresh()
         if not self._support_refresh.is_running():
             self._support_refresh.start()
+        if self.intake is not None and not self._retry_publications.is_running():
+            self._retry_publications.start()
         audit.stdout_event(
             "ready",
             user=str(self.user),
@@ -215,7 +243,7 @@ class SpiderBot(commands.Bot):
                 log.error("moderation policy: %s", problem)
             self.moderation = ModerationService(
                 mode=cfg.mod_mode,
-                classifier=Classifier(self.ai),
+                classifier=Classifier(self.ai, model=cfg.mod_model),
                 policy=policy_module.Policy(ceiling=ceiling),
                 backing=store.DiscordChannelStore(case_channel),
                 enabled_channels=cfg.mod_watch_channels,

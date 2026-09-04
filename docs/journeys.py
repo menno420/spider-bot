@@ -52,7 +52,7 @@ def H(t): print("\n" + "="*78 + "\n  " + t + "\n" + "="*78)
 
 class FakeGW:
     def __init__(self, text): self.text, self.enabled, self.system = text, True, None
-    async def reply(self, payload, *, mode, system=None, timeout_s=45.0):
+    async def reply(self, payload, *, mode, system=None, model=None, timeout_s=45.0):
         self.system, self.mode, self.payload = system, mode, payload
         return AIResult(self.text, "ok", "test-model", 120, 30)
 
@@ -79,7 +79,11 @@ async def main():
         title="Game freezes when I release the silk",
         description="It froze twice near 3 km, right after I let go at the top of a swing.",
         device="Pixel 7a, Android 15", repro_steps="Swing, reel in, release at the apex.",
-        reporter=M.Reporter(user_id=555, display_name="rin", channel_id=9))
+        reporter=M.Reporter(user_id=555, display_name="rin", channel_id=9),
+        # The bug form states, before the tester types, that a report may reach
+        # the game's public tracker. `reporter_cleared` defaults False so an
+        # entry point that has NOT said so cannot produce a publishable report.
+        reporter_cleared=True)
     print("  member sees:", out.reporter_message)
     print("  classifier:  ", out.report.sensitivity, "-", out.report.sensitivity_reason[:60])
     print("  may publish? ", out.report.may_publish, "  <- nobody has cleared it yet")
@@ -98,7 +102,7 @@ async def main():
     st2 = store.InMemoryStore(); dead = DeadGH(); svc2 = isvc.IntakeService(st2, dead)
     o = await svc2.file(category=M.Category.BUG, title="Bird clips walls",
         description="The bird caught me through a wall in Storm Ridge.",
-        reporter=M.Reporter(user_id=1))
+        reporter=M.Reporter(user_id=1), reporter_cleared=True)
     await svc2.approve(o.report.id, by="menno")
     print("  saved:", o.reporter_message)
     f = await svc2.publish(o.report.id)
@@ -125,7 +129,7 @@ async def main():
     o4 = await svc4.file(category=M.Category.BUG,
         title="@menno420 look at #1",
         description="ping @everyone see #1 and menno420/fleet-manager#2\n```\nhidden\n```",
-        reporter=M.Reporter(user_id=2))
+        reporter=M.Reporter(user_id=2), reporter_cleared=True)
     await svc4.approve(o4.report.id, by="menno")
     await svc4.publish(o4.report.id)
     t4, b4, _ = g4.created[0]
@@ -147,7 +151,7 @@ async def main():
          "Marcus scheldt mij elke avond uit."),
     ]:
         o = await svc4b.file(category=M.Category.BUG, title="Freeze",
-                             description=desc, reporter=M.Reporter(user_id=4))
+                             description=desc, reporter=M.Reporter(user_id=4), reporter_cleared=True)
         r = await svc4b.publish(o.report.id)
         print(f"  {label}")
         print(f"    classifier says: {o.report.sensitivity} (it cannot read this)")
@@ -177,7 +181,7 @@ async def main():
     o5 = await svc5.file(category=M.Category.GAMEPLAY_FEEDBACK,
         title="Impossible around 5 km", description="I cannot get past about 5 km on standard.",
         evidence_summary=tuple(ev.summary_lines(redact.for_github)),
-        evidence_format=evidence.SUPPORTED_FORMAT, reporter=M.Reporter(user_id=3))
+        evidence_format=evidence.SUPPORTED_FORMAT, reporter=M.Reporter(user_id=3), reporter_cleared=True)
     await svc5.approve(o5.report.id, by="menno")
     await svc5.publish(o5.report.id)
     print("\n  --- the issue's run-evidence section ---")

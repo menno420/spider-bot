@@ -27,9 +27,12 @@ already talking to a human about it.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import re
 import time
+from collections import defaultdict
 
 import discord
 from discord import app_commands
@@ -87,6 +90,20 @@ SIGNALS: tuple[tuple[re.Pattern[str], Category], ...] = (
         Category.GAMEPLAY_FEEDBACK,
     ),
 )
+
+#: How much of the issue body goes in one preview message. Discord's embed
+#: description limit is 4096; the rest is a margin for the heading.
+PREVIEW_PAGE = 3500
+
+#: One lock per draft id, minted on demand. Process-local, which is right: a
+#: draft belongs to one member and one panel, and two presses of the same
+#: button reach the same process.
+_DRAFT_LOCKS: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+
+def _draft_lock(draft_id: str) -> asyncio.Lock:
+    return _DRAFT_LOCKS[draft_id]
+
 
 OFFER_COOLDOWN_S = 900
 MIN_LENGTH = 25
@@ -176,6 +193,16 @@ class ConfirmFiling(
         # custom_id on every press, so any second click that reaches the
         # gateway before the edit lands - a double tap, a stale client, a
         # flaky connection - would otherwise file the same report twice.
+        # Serialised per draft. Codex, spider-bot#3, 2026-09-04: the consume
+        # check below handles a SEQUENTIAL retry, and a real double-click sends
+        # two interactions that both read the draft before either writes — so
+        # both saw no `filed_report_id` and both filed. The lock makes the
+        # read-check-write one step; the check inside it then answers both.
+        async with _draft_lock(self.draft_id):
+            await self._file_once(interaction, service, backing, draft, bot)
+
+    async def _file_once(self, interaction, service, backing, draft, bot) -> None:
+        draft = await backing.get(DRAFTS, self.draft_id) or draft
         already = draft.get("filed_report_id")
         if already:
             await safe_followup(
@@ -197,6 +224,8 @@ class ConfirmFiling(
                 message_id=draft.get("message_id"),
             ),
             correlation_id=str(draft.get("correlation_id", "")),
+            # The offer panel says it before the member presses Save it.
+            reporter_cleared=True,
         )
         if outcome.ok and outcome.report is not None:
             await backing.append(
@@ -274,8 +303,10 @@ def build_offer(bot, draft_id: str, category: Category, title: str, description:
         description=(
             f"I would save this as **{CATEGORY_LABELS[category]}**:\n\n"
             f"> {style.escape_name(title)}\n\n"
-            "Menno reads these. If I have got it wrong, press **No thanks** and "
-            "use the buttons on `/home` instead."
+            "Menno reads these, and he may put it on the game's public issue "
+            "tracker — never your name or anything private, and never until he "
+            "presses publish himself. If I have got it wrong, press "
+            "**No thanks** and use the buttons on `/home` instead."
         ),
         color=style.BRAND,
         icon_url=style.avatar_url(bot),
@@ -284,6 +315,11 @@ def build_offer(bot, draft_id: str, category: Category, title: str, description:
     view.add_item(ConfirmFiling(draft_id))
     view.add_item(DismissFiling(draft_id))
     return embed, view
+
+
+def body_digest(report) -> str:
+    """A digest of the exact bytes that would be published."""
+    return hashlib.sha256(report.public_body().encode("utf-8")).hexdigest()
 
 
 class PublishPreview(Panel):
@@ -305,9 +341,17 @@ class PublishPreview(Panel):
     from when the panel was built.
     """
 
-    def __init__(self, author, report_id: str) -> None:
+    def __init__(self, author, report_id: str, digest: str) -> None:
         super().__init__(author, timeout=180)
         self.report_id = report_id
+        #: SHA-256 of the exact body shown to this approver. Codex,
+        #: spider-bot#3, 2026-09-04: the preview was truncated at 3,000
+        #: characters and the button published the whole body, so
+        #: member-controlled text in the tail reached GitHub unread — the same
+        #: defect as approving by id, one layer in. The body is now shown in
+        #: full across as many messages as it needs, and the press is refused
+        #: if what would be published is not what was read.
+        self.digest = digest
 
     @discord.ui.button(label="Publish it", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, _button) -> None:
@@ -324,6 +368,17 @@ class PublishPreview(Panel):
             await safe_edit(
                 interaction,
                 content=f"`{self.report_id}` is no longer publishable.",
+                embed=None,
+                view=None,
+            )
+            return
+        if body_digest(report) != self.digest:
+            await safe_edit(
+                interaction,
+                content=(
+                    f"`{self.report_id}` has changed since you read it. "
+                    "Run `/publish` again to see the current text."
+                ),
                 embed=None,
                 view=None,
             )
@@ -493,23 +548,42 @@ class IntakeCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        # The REAL strings, not a summary of them: a preview that paraphrases
-        # is the same failure as a title-only queue.
+        # The REAL strings, ALL of them: a preview that paraphrases is the same
+        # failure as a title-only queue, and a preview that truncates is that
+        # failure moved into the tail.
         body = report.public_body()
-        panel = PublishPreview(interaction.user, report.id)
-        embed = style.embed(
-            title=f"{style.WARN} Publish this, publicly, to {self.cfg.github_repo}?",
-            description=(
-                f"**Issue title**\n{report.public_title()}\n\n"
-                f"**Issue body — this is exactly what goes on the internet**\n"
-                f"{body[:3000]}"
-                + ("\n\n_(body truncated in this preview)_" if len(body) > 3000 else "")
-                + f"\n\nLabels: {', '.join(report.labels())}"
+        pages = [body[i : i + PREVIEW_PAGE] for i in range(0, len(body), PREVIEW_PAGE)] or [""]
+        for number, page in enumerate(pages, start=1):
+            await interaction.followup.send(
+                embed=style.embed(
+                    title=(
+                        f"{style.WARN} Publish this to {self.cfg.github_repo}?"
+                        if number == 1
+                        else f"…continued ({number} of {len(pages)})"
+                    ),
+                    description=(
+                        f"**Issue title**\n{report.public_title()}\n\n"
+                        f"**Issue body — this is exactly what goes on the internet**\n"
+                        if number == 1
+                        else ""
+                    )
+                    + page,
+                    color=style.WARNING,
+                    icon_url=style.avatar_url(self.bot),
+                ),
+                ephemeral=True,
+            )
+        panel = PublishPreview(interaction.user, report.id, body_digest(report))
+        sent = await interaction.followup.send(
+            content=(
+                f"Labels: {', '.join(report.labels())}\n"
+                f"That is the whole body ({len(body)} characters"
+                + (f" over {len(pages)} messages" if len(pages) > 1 else "")
+                + "). Publishing is public and permanent."
             ),
-            color=style.WARNING,
-            icon_url=style.avatar_url(self.bot),
+            view=panel,
+            ephemeral=True,
         )
-        sent = await interaction.followup.send(embed=embed, view=panel, ephemeral=True)
         panel.message = sent
 
     @app_commands.command(

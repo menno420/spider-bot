@@ -36,10 +36,11 @@ class FakeGateway:
         self.calls: list[tuple[str, str, str | None]] = []
         self.reason = reason
 
-    async def reply(self, payload, *, mode, system=None, timeout_s=45.0):
+    async def reply(self, payload, *, mode, system=None, model=None, timeout_s=45.0):
         # `system` is recorded, not ignored: the whole moderation system prompt
         # was silently dropped for the life of this module because nothing
         # asserted it arrived.
+        self.model = model
         self.calls.append((payload, mode, system))
         return AIResult(self.text, self.reason, "test-model", 100, 20)
 
@@ -898,3 +899,80 @@ def test_a_display_name_cannot_break_out_of_the_chat_wrapper():
         assert safety.speaker_label(bad, "fallback") == "fallback"
     # Positive control: an ordinary name is kept.
     assert safety.speaker_label("Menno420", "fallback") == "Menno420"
+
+
+# -- what Codex found at 197ae25 ----------------------------------------------
+
+
+@pytest.mark.parametrize("prefix", ["!", "?", ".", "-", "/"])
+def test_a_punctuation_prefix_does_not_exempt_a_message(prefix):
+    """Codex, spider-bot#3, 2026-09-04: the precheck skipped anything starting
+    with `!?.-/` as "looks like a command", while this bot's text-command prefix
+    is `when_mentioned` only and slash commands arrive as interactions rather
+    than messages. So none of those prefixes identified a command, and all five
+    were a one-character moderation bypass."""
+    message = a_message(f"{prefix}you are worthless and everyone here knows it")
+    assert prechecks.should_analyse(
+        message, bot_user_id=999, enabled_channels=("general",)
+    ).proceed
+
+
+def test_a_mutating_action_does_not_happen_if_its_case_cannot_be_recorded():
+    """Codex, spider-bot#3, 2026-09-04: the executor ran and `_record` came
+    after it, so a case channel that was full or unwritable produced a
+    member-visible timeout with no case behind it — invisible to the review
+    queue and to any later question about why it happened."""
+
+    class RefusingStore(store.InMemoryStore):
+        async def append(self, collection, key, data):
+            if collection == store.CASES:
+                return False
+            return await super().append(collection, key, data)
+
+    subject = member(5, "member")
+    service = a_service(mode="enforce", text=verdict_json(), backing=RefusingStore())
+    case = run(service.handle_message(a_message(author=subject), bot_user_id=999))
+
+    assert subject.timeout_calls == [], "no action without a record of it"
+    assert case.status is CaseStatus.REFUSED
+    assert "could not be recorded" in case.refusal_reason
+
+    # Positive control: with a working store the same verdict does act, so the
+    # assertion above is about the write and not about the pipeline.
+    working = member(6, "member")
+    ok = a_service(mode="enforce", text=verdict_json())
+    run(ok.handle_message(a_message(author=working), bot_user_id=999))
+    assert len(working.timeout_calls) == 1
+
+
+def test_shadow_mode_does_not_need_a_case_write_to_do_nothing():
+    """The pre-write is only for operations that MUTATE. Shadow mode changes
+    nothing a member sees, so a store outage must not turn it into a refusal
+    storm — the case is still attempted, and its failure is still logged."""
+
+    class RefusingStore(store.InMemoryStore):
+        async def append(self, collection, key, data):
+            return False
+
+    service = a_service(mode="shadow", text=verdict_json(), backing=RefusingStore())
+    case = run(service.handle_message(a_message(), bot_user_id=999))
+    assert case.status is not CaseStatus.REFUSED
+    assert case.operation is Operation.TIMEOUT_SHORT
+    assert case.performed is Operation.NOTHING
+
+
+def test_the_moderation_model_override_reaches_the_call():
+    """`MOD_MODEL` was loaded into config, printed in `/status`, and read by
+    nothing: moderation always used `AI_MODEL`."""
+    gateway = FakeGateway(verdict_json())
+    service = a_service(mode="shadow")
+    service._classifier = Classifier(gateway, model="claude-haiku-4-5-20251001")
+    run(service.handle_message(a_message(), bot_user_id=999))
+    assert gateway.model == "claude-haiku-4-5-20251001"
+
+    # Positive control: unset means the shared model, not an empty string.
+    plain = FakeGateway(verdict_json())
+    service2 = a_service(mode="shadow")
+    service2._classifier = Classifier(plain)
+    run(service2.handle_message(a_message(), bot_user_id=999))
+    assert plain.model is None

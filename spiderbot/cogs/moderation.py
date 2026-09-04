@@ -217,6 +217,10 @@ class ModerationCog(commands.Cog):
             guild=interaction.guild,
             subject=member,
             actor=interaction.user,
+            # WARN posts in a channel, so the executor needs one. Without it
+            # `/modact … warn` always answered "no channel to warn in" — the
+            # action was in the choice list and could never be performed.
+            message=_ChannelOnly(interaction.channel),
             reason=reason,
         )
         if case.refusal_reason:
@@ -229,6 +233,21 @@ class ModerationCog(commands.Cog):
             f"Case `{case.id}`.",
             ephemeral=True,
         )
+
+
+class _ChannelOnly:
+    """A message-shaped object carrying only a channel.
+
+    `EnforcingExecutor.perform` reads `message.channel` to post a warning and
+    `message.delete` to remove one. A staff `/modact warn` has a channel and no
+    message to delete, and passing the interaction itself would hand a delete
+    path to something that must not have one.
+    """
+
+    __slots__ = ("channel",)
+
+    def __init__(self, channel) -> None:
+        self.channel = channel
 
 
 async def setup(bot) -> None:

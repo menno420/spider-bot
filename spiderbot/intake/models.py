@@ -188,12 +188,17 @@ class Report:
     github_issue_url: str = ""
     duplicate_of: str = ""
 
-    #: Whether the reporter agreed to this leaving the server. An explicit form
-    #: submission IS that agreement — they typed it into a form whose button
-    #: said what it does — so entry points set it True. The conversational path
-    #: sets it only when the person presses confirm on the summary the bot
-    #: showed them, which is the brief's own sequence.
-    reporter_cleared: bool = True
+    #: Whether the reporter agreed to this leaving the server.
+    #:
+    #: **Defaults to FALSE**, and every entry point that sets it True has told
+    #: the member, before they typed, that a report may end up on the game's
+    #: public issue tracker. Codex, spider-bot#3, 2026-09-04: it used to
+    #: default True on the argument that submitting a form IS the agreement —
+    #: but no form said so before submission, and the receipt mentioned it only
+    #: after the report was already marked cleared. A default that asserts
+    #: consent nobody gave is worse than no field, because `may_publish` cites
+    #: it. Now a new entry point that forgets defaults to private.
+    reporter_cleared: bool = False
     #: Who cleared this for a PUBLIC issue. Empty means nobody, and nobody
     #: means it stays private — see `may_publish`.
     approved_by: str = ""
