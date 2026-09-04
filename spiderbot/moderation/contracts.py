@@ -57,6 +57,24 @@ MAX_QUOTE_CHARS = 400
 #: message is the only honest thing a model can do — so that is allowed
 #: explicitly rather than making short messages unjudgeable.
 MIN_QUOTE_CHARS = 8
+#: The floor never rises above this, however long the message. A REJECTED
+#: verdict produces no action AND no case, so a floor that bites on honest
+#: quotes does not send the message to a human — it makes real abuse invisible.
+#: An adversarial review proposed 25% of the message length, capped at 120;
+#: that is the wrong trade here for exactly this reason, and 40 characters is
+#: about seven words, which is a reasonable evidence quote from any message.
+MAX_QUOTE_FLOOR = 40
+
+
+def quote_floor(content_length: int) -> int:
+    """How many characters of evidence a message of this length must yield.
+
+    Absolute floors do not scale: 8 characters is 27% of a 30-character
+    message and 0.4% of a 2000-character one, and in the long case almost any
+    8-character run exists, so a fabricated verdict can always find one. The
+    floor therefore grows with the message and stops at `MAX_QUOTE_FLOOR`.
+    """
+    return min(MAX_QUOTE_FLOOR, max(MIN_QUOTE_CHARS, content_length // 8))
 
 
 class Category(StrEnum):
@@ -160,6 +178,7 @@ class Rejection(StrEnum):
     QUOTE_NOT_IN_CONTENT = "quote_not_in_content"
     QUOTE_MISSING = "quote_missing"
     QUOTE_TOO_SHORT = "quote_too_short"
+    BAD_FLAG = "bad_flag"
     EMPTY_RESPONSE = "empty_response"
 
 
@@ -313,6 +332,16 @@ def parse_verdict(raw: str | None, *, content: str, model: str) -> ParseResult:
     if not 0.0 <= confidence <= 1.0 or confidence != confidence:  # NaN fails both
         return ParseResult(rejection=Rejection.BAD_CONFIDENCE, detail=repr(confidence_raw)[:60])
 
+    for flag in ("human_review_required", "targets_member"):
+        if flag in parsed and not isinstance(parsed[flag], bool):
+            # Checked as strictly as severity and confidence, and for the same
+            # reason. `bool("false")` is True, so a model emitting the STRING
+            # "false" turned `targets_member` ON — re-enabling the very acting
+            # rules that field exists to narrow — while `severity: "3"` beside
+            # it was correctly rejected. A flag that decides whether the bot
+            # acts is not a field to be lenient about.
+            return ParseResult(rejection=Rejection.BAD_FLAG, detail=f"{flag}={parsed[flag]!r}"[:60])
+
     quote = str(parsed["evidence_quote"])[:MAX_QUOTE_CHARS]
     if category is Category.NONE:
         # Nothing to point at, and demanding a quote for "this is fine" would
@@ -323,9 +352,9 @@ def parse_verdict(raw: str | None, *, content: str, model: str) -> ParseResult:
             return ParseResult(rejection=Rejection.QUOTE_MISSING)
         normalised_quote = _normalise(quote)
         normalised_content = _normalise(content)
+        floor = quote_floor(len(normalised_content))
         if (
-            len(quote.strip()) < MIN_QUOTE_CHARS
-            or len(normalised_quote) < MIN_QUOTE_CHARS
+            len(quote.strip()) < floor or len(normalised_quote) < floor
         ) and normalised_quote != normalised_content:
             # Too short to be evidence, and not the whole message either. BOTH
             # lengths, because NFKC expands: `MEASURED` 2026-09-04, U+FDFA

@@ -208,6 +208,29 @@ structural change - that plan outranks preferences you arrive with.
     represent counts as clamped too: replacing 1e400 with a silent `0.0` shows
     "0 m" as though the game had measured it.
 
+38. **A flag the bot acts on is type-checked, not coerced.** `bool("false")`
+    is True, so a model emitting the string `"false"` turned `targets_member`
+    ON — re-enabling the very acting rules invariant 29 added it to narrow —
+    while `severity: "3"` beside it was correctly rejected. Every field that
+    changes what the bot does gets the same strictness.
+
+39. **The untrusted-data boundary is a token, not a constant.** Two literal
+    string replacements are not a disarm: one zero-width character inside the
+    marker defeated both, and the model received a forgery that rendered
+    byte-identically to a real boundary. The strip now covers the invisibles,
+    and the moderation span markers carry a per-call random token the member
+    cannot guess. **Say what this is and is not:** it turns an
+    indistinguishable forgery into a visible discrepancy. It is not a proof.
+    The model-independent defences are the quote check, the policy thresholds
+    and shadow mode — and the attack it answers produced EVASION (`category:
+    none`, nothing done), not a false punishment.
+
+40. **Member-controlled text goes inside the wrapper, never into the sentence
+    introducing it.** A display name was the one member-controlled string in
+    the chat prompt outside the untrusted markers, protected by a filter that
+    missed the three Unicode line breaks. A filter is the belt; containment is
+    the braces, and the braces go on.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must
