@@ -83,6 +83,20 @@ ROUTES: tuple[Route, ...] = (
         row=0,
     ),
     Route(
+        key="idea",
+        label="Share an idea",
+        emoji=style.SPEECH,
+        purpose="Something you think would make the game better.",
+        row=1,
+    ),
+    Route(
+        key="myreports",
+        label="My reports",
+        emoji=style.CHART,
+        purpose="What you have reported, and what happened to it.",
+        row=1,
+    ),
+    Route(
         key="clock",
         label="Test status",
         emoji=style.CHART,
@@ -105,6 +119,33 @@ ROUTES: tuple[Route, ...] = (
         purpose="Version, AI state, which channels the bot resolved.",
         audience=Audience.MOD,
         row=1,
+    ),
+    Route(
+        key="tell",
+        label="Tell Menno privately",
+        emoji=style.WARN,
+        purpose=(
+            "Something you would rather not say in the channel - about the "
+            "game, the test, or another member. Only Menno and the moderators "
+            "see it."
+        ),
+        row=2,
+    ),
+    Route(
+        key="reports",
+        label="Reports",
+        emoji=style.BUG,
+        purpose="Everything members have reported, and what is waiting to be filed.",
+        audience=Audience.MOD,
+        row=2,
+    ),
+    Route(
+        key="cases",
+        label="Moderation",
+        emoji=style.SIREN,
+        purpose="What the moderation classifier decided, and whether it was right.",
+        audience=Audience.MOD,
+        row=2,
     ),
 )
 

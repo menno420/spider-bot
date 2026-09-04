@@ -17,9 +17,16 @@ import logging
 
 import discord
 
-from spiderbot import audit, cohort, presets, roster, style
+from spiderbot import audit, cohort, presets, redact, roster, style
+from spiderbot.moderation import cases as case_module
 from spiderbot.ui.base import Panel, bind_message
-from spiderbot.ui.forms import AskModal, BugReportModal, FeedbackModal
+from spiderbot.ui.forms import (
+    AskModal,
+    BugReportModal,
+    ComplaintModal,
+    FeedbackModal,
+    IdeaModal,
+)
 from spiderbot.ui.routes import (
     ROUTES_BY_KEY,
     Audience,
@@ -31,6 +38,33 @@ from spiderbot.ui.safe import safe_edit, safe_followup
 log = logging.getLogger("spiderbot.ui.home")
 
 NO_MENTIONS = discord.AllowedMentions.none()
+
+
+
+def _my_report_line(report) -> str:
+    """One line for the reporter. Their own words, escaped; no staff detail."""
+    where = ""
+    if report.github_issue_url:
+        where = f" — [tracked]({report.github_issue_url})"
+    elif report.status.value.startswith("publish"):
+        where = " — waiting to be filed"
+    state = {
+        "published": "filed",
+        "resolved": "resolved",
+        "stored": "saved",
+        "publish_pending": "filing",
+        "publish_failed": "queued",
+        "duplicate": "already known",
+    }.get(report.status.value, report.status.value)
+    title = redact.for_discord(report.title or "(no title)", limit=70)
+    return f"`{report.id}` **{title}** — {state}{where}"
+
+
+def _staff_report_line(report) -> str:
+    private = "" if report.is_public_safe else " · private"
+    issue = f" · #{report.github_issue_number}" if report.github_issue_number else ""
+    title = redact.for_discord(report.title or "(no title)", limit=60)
+    return f"`{report.id}` [{report.category}] {title} — {report.status}{issue}{private}"
 
 
 def health_lines(bot) -> list[str]:
@@ -216,6 +250,59 @@ class HomePanel(Panel):
             return
         await interaction.response.send_modal(AskModal(self.bot))
 
+    async def _do_idea(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(IdeaModal(self.bot))
+
+    async def _do_myreports(self, interaction: discord.Interaction) -> None:
+        """What this person reported, and what happened to it.
+
+        A PULL surface, deliberately. The bot never DMs first (invariant 6) and
+        the two deliberate pings are spelled out and spoken for (invariant 20),
+        so "your bug was fixed" cannot be pushed - it has to be somewhere a
+        person can go and look. This is that place.
+        """
+        service = getattr(self.bot, "intake", None)
+        if service is None:
+            await interaction.response.send_message(
+                "Reports are not switched on yet.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        mine = [
+            report
+            for report in await service.all_reports()
+            if report.reporter and report.reporter.user_id == interaction.user.id
+        ][:15]
+        if not mine:
+            body = (
+                "You have not reported anything yet. Use **Report a bug**, "
+                "**Send feedback** or **Share an idea** - or just tell me in the "
+                "channel and I will offer to write it down."
+            )
+        else:
+            body = "\n".join(_my_report_line(report) for report in mine)
+        await interaction.followup.send(
+            embed=style.embed(
+                title=f"{style.CHART} Your reports",
+                description=body[:3900],
+                color=style.NEUTRAL,
+                icon_url=style.avatar_url(self.bot),
+            ),
+            ephemeral=True,
+        )
+
+    async def _do_tell(self, interaction: discord.Interaction) -> None:
+        """The private route, and the reason a "complaint" button is not enough.
+
+        "I think this player is harassing me" and "the game is way too hard"
+        arrive through the same door and only one of them may ever be public,
+        so this door is private for BOTH and a human separates them afterwards.
+        The alternative - asking the member to classify their own complaint
+        before they type it - puts the privacy decision on the person least
+        able to make it and most harmed if it is wrong.
+        """
+        await interaction.response.send_modal(ComplaintModal(self.bot))
+
     # -- staff actions -----------------------------------------------------
 
     async def _do_clock(self, interaction: discord.Interaction) -> None:
@@ -252,6 +339,85 @@ class HomePanel(Panel):
         picker.message = await safe_followup(
             interaction, embed=embed, view=picker, ephemeral=True
         )
+
+    async def _do_reports(self, interaction: discord.Interaction) -> None:
+        """The owner's queue: what came in, and what is waiting to be filed."""
+        service = getattr(self.bot, "intake", None)
+        if service is None:
+            await interaction.response.send_message(
+                "Intake is not configured - no state channel.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        reports = await service.all_reports()
+        pending = await service.pending_publication()
+        lines = [
+            f"**{len(reports)}** reports · **{len(pending)}** waiting to reach GitHub",
+            "",
+        ]
+        for report in reports[:12]:
+            lines.append(_staff_report_line(report))
+        if pending:
+            lines += [
+                "",
+                "*Waiting reports retry automatically. A GitHub outage delays "
+                "them; it does not lose them.*",
+            ]
+        await interaction.followup.send(
+            embed=style.embed(
+                title=f"{style.BUG} Reports",
+                description="\n".join(lines)[:3900],
+                color=style.NEUTRAL,
+                icon_url=style.avatar_url(self.bot),
+            ),
+            ephemeral=True,
+        )
+        audit.stdout_event(
+            "reports_viewed", by=str(interaction.user), total=len(reports),
+            pending=len(pending),
+        )
+
+    async def _do_cases(self, interaction: discord.Interaction) -> None:
+        """What the classifier decided, and whether a moderator agreed.
+
+        This is the surface shadow mode exists for: without somewhere to read
+        the decisions and mark them, a shadow corpus is a log rather than a
+        falsification loop.
+        """
+        service = getattr(self.bot, "moderation", None)
+        if service is None:
+            await interaction.response.send_message(
+                "Moderation is not configured.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        cases = await service.cases(limit=12)
+        tally = case_module.review_tally(cases)
+        lines = list(service.describe())
+        lines += ["", f"**{len(cases)}** recent decisions"]
+        if cases:
+            would = sum(1 for c in cases if c.would_have_acted)
+            lines.append(
+                f"· {would} would have acted · {tally['unreviewed']} not yet reviewed"
+            )
+            lines.append("")
+            lines += [c.summary_line() for c in cases]
+            lines += [
+                "",
+                "*Mark a decision with `/case review <id> <verdict>`. Until "
+                "decisions are reviewed, there is no evidence for turning any "
+                "enforcement class on.*",
+            ]
+        await interaction.followup.send(
+            embed=style.embed(
+                title=f"{style.SIREN} Moderation",
+                description="\n".join(lines)[:3900],
+                color=style.NEUTRAL,
+                icon_url=style.avatar_url(self.bot),
+            ),
+            ephemeral=True,
+        )
+        audit.stdout_event("cases_viewed", by=str(interaction.user), shown=len(cases))
 
     async def _do_health(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(

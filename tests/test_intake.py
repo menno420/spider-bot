@@ -500,3 +500,55 @@ def test_a_rejection_that_is_not_about_labels_still_fails():
     svc = a_service(github)
     out = run(svc.file(category=Category.BUG, title="t", description="d"))
     assert not run(svc.publish(out.report.id)).published
+
+
+# -- conversational filing ----------------------------------------------------
+
+
+def test_natural_language_is_detected_and_categorised():
+    from spiderbot.cogs.intake import detect
+
+    cases = [
+        ("The game froze when I released the silk near 3km", Category.BUG),
+        ("i cant install it, it says app not available", Category.TESTING_PROBLEM),
+        ("it would be nice if the bird slowed down after a dive", Category.IDEA),
+        ("the reel button feels too weak on the newest build", Category.GAMEPLAY_FEEDBACK),
+    ]
+    for text, expected in cases:
+        assert detect(text) is expected, text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "lol",
+        "gg",
+        "hey everyone how is it going today, nice weather",
+        "/home",
+        "thanks menno that was quick",
+    ],
+)
+def test_ordinary_chat_produces_no_offer(text):
+    """A false offer is cheap; nagging is not."""
+    from spiderbot.cogs.intake import detect
+
+    assert detect(text) is None
+
+
+def test_a_summary_shows_the_persons_own_words_not_a_paraphrase():
+    """They have to be able to recognise and correct what will be saved."""
+    from spiderbot.cogs.intake import summarise
+
+    title, description = summarise(
+        "The game froze when I released the silk. It happened twice near 3km."
+    )
+    assert title == "The game froze when I released the silk."
+    assert "twice near 3km" in description
+
+
+def test_a_very_long_first_sentence_is_trimmed_not_dropped():
+    from spiderbot.cogs.intake import summarise
+
+    title, _ = summarise("x" * 300)
+    assert len(title) <= 90 and title.endswith("...")

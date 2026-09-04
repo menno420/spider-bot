@@ -1,0 +1,359 @@
+"""Conversational filing: someone says they found a bug, and it gets written down.
+
+The owner's direction is that people should be able to *"talk naturally"* to
+Spider Bot about bugs, feedback, complaints and ideas — not learn a command or a
+form name. This cog is that route, and it goes through the same
+`IntakeService` as every button, so there is one implementation and many doors.
+
+**The sequence is the brief's own, and every step of it is deliberate:**
+
+1. someone writes something that reads like a report;
+2. the bot offers, once, quietly, in the channel;
+3. it SHOWS the structured summary it intends to save, before saving anything;
+4. they press **Save it** or **No thanks**;
+5. only then does it file, and it hands back the durable reference.
+
+**The draft survives a deploy.** Push to `main` deploys straight to production
+here, so a draft held in a view's memory would evaporate mid-conversation and
+the button would go dead. Drafts are written to the store and the confirm
+button is a `discord.ui.DynamicItem` carrying the draft id in its `custom_id`,
+so it is reconstructed from the id on click — which is also why the handler
+re-resolves who is pressing rather than trusting the panel.
+
+**The offer never nags.** One offer per person per cooldown, only in the
+channels initiative is already allow-listed for, and never when the person is
+already talking to a human about it.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import time
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+from spiderbot import audit, ids, style
+from spiderbot.intake.models import Category, Reporter
+from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
+
+log = logging.getLogger("spiderbot.cogs.intake")
+
+DRAFTS = "intake_drafts"
+
+#: Phrases that read like someone reporting something, mapped to the category
+#: they most likely mean. Deterministic and deliberately narrow: this decides
+#: only whether to OFFER, and the person decides everything after that. A false
+#: offer costs one dismissable message; a missed one costs a lost report, so
+#: the bar is set low on purpose.
+SIGNALS: tuple[tuple[re.Pattern[str], Category], ...] = (
+    (
+        re.compile(
+            r"\b(found a bug|is a bug|it crashed|game crashed|it froze|game froze|"
+            r"crashes when|freezes when|stuck in|fell through|glitch(?:ed|ing)?|"
+            r"does(?:n'?t| not) work|didn'?t work|broken)\b",
+            re.IGNORECASE,
+        ),
+        Category.BUG,
+    ),
+    (
+        re.compile(
+            r"\b(can'?t (?:install|join|opt|get)|app not available|"
+            r"not available (?:for|on)|won'?t install|opt[ -]?in .*(?:fail|not work)|"
+            r"google group)\b",
+            re.IGNORECASE,
+        ),
+        Category.TESTING_PROBLEM,
+    ),
+    (
+        re.compile(
+            r"\b(would be (?:better|nice|cool) if|you should add|it needs a|"
+            r"idea[: ]|suggestion[: ]|what if the|why not (?:add|make))\b",
+            re.IGNORECASE,
+        ),
+        Category.IDEA,
+    ),
+    (
+        re.compile(
+            r"\b(feels? too (?:weak|slow|fast|hard|easy)|way too (?:hard|difficult)|"
+            r"too difficult|impossible (?:around|after|at)|keeps? killing me|"
+            r"unfair|(?:feels|feel) (?:floaty|sluggish|off))\b",
+            re.IGNORECASE,
+        ),
+        Category.GAMEPLAY_FEEDBACK,
+    ),
+)
+
+OFFER_COOLDOWN_S = 900
+MIN_LENGTH = 25
+
+
+def detect(text: str) -> Category | None:
+    """The likely category, or None. Deterministic; no model call."""
+    if len(text.strip()) < MIN_LENGTH:
+        return None
+    for pattern, category in SIGNALS:
+        if pattern.search(text):
+            return category
+    return None
+
+
+def summarise(text: str) -> tuple[str, str]:
+    """A title and a description from what they actually wrote.
+
+    Their words, not a paraphrase: the summary shown before saving has to be
+    something they can recognise and correct, and a generated title they never
+    said is harder to check than a trimmed version of their own sentence.
+    """
+    cleaned = " ".join(text.split())
+    first = re.split(r"(?<=[.!?])\s+", cleaned)[0]
+    title = first if len(first) <= 90 else first[:87] + "..."
+    return title, cleaned
+
+
+class ConfirmFiling(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"sbintake:(?P<draft>[A-Z0-9-]{8,64})",
+):
+    """Save it. Persistent, so it still works after a deploy.
+
+    `DynamicItem` reconstructs this from the `custom_id` on click, so the draft
+    is read from the store rather than from anything the view was holding when
+    it was created.
+    """
+
+    def __init__(self, draft_id: str) -> None:
+        self.draft_id = draft_id
+        super().__init__(
+            discord.ui.Button(
+                label="Save it",
+                style=discord.ButtonStyle.success,
+                emoji=style.OK,
+                custom_id=f"sbintake:{draft_id}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(match["draft"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        service = getattr(bot, "intake", None)
+        backing = getattr(service, "_store", None)
+        if service is None or backing is None:
+            await interaction.response.send_message(
+                "I cannot save that right now.", ephemeral=True
+            )
+            return
+        draft = await backing.get(DRAFTS, self.draft_id)
+        if draft is None:
+            await interaction.response.send_message(
+                "That offer has expired - tell me again and I will write it down.",
+                ephemeral=True,
+            )
+            return
+        # Authority is re-resolved at press time: the draft names whose report
+        # this is, and only they may save it. A panel in a public channel is
+        # pressable by anyone, so this is not optional.
+        if draft.get("user_id") != interaction.user.id:
+            await interaction.response.send_message(
+                "That is someone else's report.", ephemeral=True
+            )
+            return
+        try:
+            category = Category(draft.get("category", "general"))
+        except ValueError:
+            category = Category.GENERAL
+        outcome = await service.file(
+            category=category,
+            title=str(draft.get("title", ""))[:120],
+            description=str(draft.get("description", ""))[:4000],
+            reporter=Reporter(
+                user_id=interaction.user.id,
+                display_name=getattr(interaction.user, "display_name", ""),
+                channel_id=draft.get("channel_id"),
+                message_id=draft.get("message_id"),
+            ),
+            correlation_id=str(draft.get("correlation_id", "")),
+        )
+        await interaction.response.edit_message(
+            content=None,
+            embed=style.embed(
+                title=f"{style.OK} Written down",
+                description=outcome.reporter_message,
+                color=style.SUCCESS if outcome.ok else style.ALARM,
+                icon_url=style.avatar_url(bot),
+            ),
+            view=None,
+        )
+        if outcome.ok and outcome.report.may_publish:
+            await service.publish(outcome.report.id)
+
+
+class DismissFiling(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"sbnothanks:(?P<draft>[A-Z0-9-]{8,64})",
+):
+    """No thanks. Also persistent, so a stale offer is never a dead button."""
+
+    def __init__(self, draft_id: str) -> None:
+        self.draft_id = draft_id
+        super().__init__(
+            discord.ui.Button(
+                label="No thanks",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"sbnothanks:{draft_id}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(match["draft"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            content="No problem.", embed=None, view=None
+        )
+        audit.stdout_event("intake_offer_declined", user=str(interaction.user))
+
+
+def build_offer(bot, draft_id: str, category: Category, title: str, description: str):
+    """The panel that shows what would be saved, before anything is saved."""
+    from spiderbot.intake.models import CATEGORY_LABELS
+
+    embed = style.embed(
+        title=f"{style.SPEECH} Want me to write that down?",
+        description=(
+            f"I would save this as **{CATEGORY_LABELS[category]}**:\n\n"
+            f"> {style.escape_name(title)}\n\n"
+            "Menno reads these. If I have got it wrong, press **No thanks** and "
+            "use the buttons on `/home` instead."
+        ),
+        color=style.BRAND,
+        icon_url=style.avatar_url(bot),
+    )
+    view = discord.ui.View(timeout=None)
+    view.add_item(ConfirmFiling(draft_id))
+    view.add_item(DismissFiling(draft_id))
+    return embed, view
+
+
+class IntakeCog(commands.Cog):
+    def __init__(self, bot) -> None:
+        self.bot = bot
+        self.cfg = bot.cfg
+        self._last_offer: dict[int, float] = {}
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Offer to write it down. Never files anything on its own."""
+        service = getattr(self.bot, "intake", None)
+        if service is None or message.guild is None or message.author.bot:
+            return
+        channel_name = getattr(message.channel, "name", "") or ""
+        # Same allow-list as AI initiative: unconfigured is silent, and a
+        # channel the owner did not name is not a channel to speak in.
+        if channel_name not in self.cfg.initiative_channels:
+            return
+        content = message.content or ""
+        if content.startswith(("/", "!")):
+            return
+        category = detect(content)
+        if category is None:
+            return
+        now = time.time()
+        if now - self._last_offer.get(message.author.id, 0.0) < OFFER_COOLDOWN_S:
+            return
+
+        title, description = summarise(content)
+        draft_id = ids.report_id()
+        backing = getattr(service, "_store", None)
+        stored = backing is not None and await backing.append(
+            DRAFTS,
+            draft_id,
+            {
+                "user_id": message.author.id,
+                "category": str(category),
+                "title": title,
+                "description": description,
+                "channel_id": message.channel.id,
+                "message_id": message.id,
+                "correlation_id": ids.correlation_id(),
+                "created_at": now,
+            },
+        )
+        if not stored:
+            return  # no durable draft, no offer: the button would be dead
+
+        embed, view = build_offer(self.bot, draft_id, category, title, description)
+        try:
+            await message.reply(
+                embed=embed,
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+                mention_author=False,
+            )
+        except discord.HTTPException:
+            log.debug("intake offer could not be delivered in #%s", channel_name)
+            return
+        self._last_offer[message.author.id] = now
+        audit.stdout_event(
+            "intake_offered",
+            user=str(message.author),
+            category=str(category),
+            draft=draft_id,
+            channel=channel_name,
+        )
+
+    # -- staff commands ------------------------------------------------------
+
+    @app_commands.command(name="report", description="Report a bug, an idea, or a problem")
+    @app_commands.describe(kind="What kind of report is this?")
+    @app_commands.choices(
+        kind=[
+            app_commands.Choice(name="a bug", value="bug"),
+            app_commands.Choice(name="an idea", value="idea"),
+            app_commands.Choice(name="how the game feels", value="gameplay_feedback"),
+            app_commands.Choice(name="something private", value="complaint"),
+        ]
+    )
+    async def report(
+        self, interaction: discord.Interaction, kind: app_commands.Choice[str]
+    ) -> None:
+        modal = {
+            "bug": BugReportModal,
+            "idea": IdeaModal,
+            "gameplay_feedback": FeedbackModal,
+            "complaint": ComplaintModal,
+        }[kind.value]
+        await interaction.response.send_modal(modal(self.bot))
+
+    @app_commands.command(
+        name="retryreports", description="Retry reports that could not reach GitHub"
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def retry(self, interaction: discord.Interaction) -> None:
+        service = getattr(self.bot, "intake", None)
+        if service is None:
+            await interaction.response.send_message(
+                f"Intake is off — create the private #{self.cfg.ch_intake_state} "
+                "channel first.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        outcomes = await service.retry_pending()
+        done = sum(1 for o in outcomes if o.published)
+        await interaction.followup.send(
+            f"Retried {len(outcomes)}; {done} reached GitHub."
+            + ("" if done == len(outcomes) else " The rest stay queued."),
+            ephemeral=True,
+        )
+
+
+async def setup(bot) -> None:
+    bot.add_dynamic_items(ConfirmFiling, DismissFiling)
+    await bot.add_cog(IntakeCog(bot))

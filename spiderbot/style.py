@@ -120,3 +120,14 @@ def ai_embed(text: str) -> discord.Embed:
     text means the bot itself is speaking.
     """
     return discord.Embed(description=f"{SPEECH} {text}", color=AI)
+
+
+def escape_name(name: str) -> str:
+    """A member's display name, safe inside one of our embeds.
+
+    Lives here rather than in `redact` because every embed built through this
+    module needs it and `style` is what both `ui/` and `cogs/` already import.
+    """
+    from spiderbot import redact
+
+    return redact.for_discord(name or "", limit=64)

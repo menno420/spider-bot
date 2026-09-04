@@ -50,7 +50,9 @@ def test_every_extension_loads_without_a_connection():
         "ChatCog",
         "CommunityCog",
         "HomeCog",
+        "IntakeCog",
         "MembershipCog",
+        "ModerationCog",
         "RosterCog",
     ]
 
