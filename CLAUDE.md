@@ -96,24 +96,34 @@ structural change - that plan outranks preferences you arrive with.
     `policy.validate()` fails the table if a rule ever produces one without
     human confirmation. Do not "temporarily" add one to test something.
 
-23. **A report is durable before anything is published.** GitHub is a sink, not
+23. **Publication needs a NAMED HUMAN, never a classifier.**
+    `Report.may_publish` requires `approved_by`, and only
+    `IntakeService.approve` sets it. Do not "simplify" this back to trusting
+    the privacy classifier: an adversarial review reproduced four ways past it,
+    and the one that matters is that its vocabulary is English while this
+    server's own language is Dutch. The classifier SORTS the queue; a person
+    DECIDES what becomes public.
+
+24. **A report is durable before anything is published.** GitHub is a sink, not
     the record: store first, then classify, then publish. A failed durable
     write is reported to the person as a failure — never thanked for.
     `Sensitivity.UNCLASSIFIED` is the initial value and is NOT publishable, so
     a report nothing classified cannot leak. The AI may only make a report
     **more** private, never less.
 
-24. **The scanned set is the published set.** Every field `Report.public_body()`
-    publishes must be read by `privacy.classify`. Adding one to the body
-    without adding it to the classifier is how contact details typed into the
-    device box get published.
+25. **The scanned set is the published set — one list.** `PUBLISHED_FIELDS`
+    defines it, `Report.published_text()` is what the classifier reads, and a
+    test asserts every name in it reaches `public_title`/`public_body`. Scan
+    the text CLEANED the way it will be published: scanning the raw field and
+    publishing the cleaned one let a zero-width space inside a trigger word
+    blind the classifier while the reader saw the word intact.
 
-25. **`spider-swing` owns the game; this bot consumes.** Game facts come from
+26. **`spider-swing` owns the game; this bot consumes.** Game facts come from
     the versioned support feed with a pinned schema, a last-known-good fallback
     and an honest staleness line that is never omitted. Never hand-copy game
     prose into this repo again — that is what drifted.
 
-26. **The tester role is never granted by code.** Not by the AI, not by a
+27. **The tester role is never granted by code.** Not by the AI, not by a
     listener, not on rejoin. It mirrors who is actually opted in on Google
     Play, which only a human can confirm; code that grants it inflates the one
     number the project is ranked against. `cogs/membership.py` restores every

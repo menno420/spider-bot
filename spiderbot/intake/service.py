@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from spiderbot import audit, ids, store
 from spiderbot.intake import github_sink, privacy
 from spiderbot.intake.models import (
+    PUBLISHABLE_STATUSES,
     Category,
     Report,
     Reporter,
@@ -162,17 +163,59 @@ class IntakeService:
         )
 
     def _receipt(self, report: Report) -> str:
-        """What the reporter is told the moment it is saved."""
+        """What the reporter is told the moment it is saved.
+
+        It no longer PROMISES a GitHub issue. It used to, and that promise was
+        made by a keyword classifier that could not read Dutch — so a member
+        writing a complaint about someone was told "I will file it on the
+        game's issue tracker" and it was true. Menno decides what becomes
+        public; the receipt says exactly that.
+        """
         base = f"Saved. Your reference is `{report.id}`."
         if report.sensitivity is Sensitivity.PUBLIC_SAFE:
             return (
-                f"{base} I will file it on the game's issue tracker so Menno "
-                "sees it with everything else."
+                f"{base} Menno will see it, and he may put it on the game's "
+                "issue tracker so it does not get lost."
             )
         return (
             f"{base} This one stays private — only Menno and the moderators "
             "will see it."
         )
+
+    async def approve(self, report_id: str, *, by: str) -> Report | None:
+        """A person clears a report for a PUBLIC issue. The publication gate.
+
+        Nothing else sets `approved_by`, and `Report.may_publish` requires it.
+        This is the whole answer to "a regex miss must not mean publish".
+        """
+        report = await self.get(report_id)
+        if report is None:
+            return None
+        if not report.is_public_safe:
+            # The classifier's judgement still binds a human here: it is a
+            # sorter, and a private report needs re-categorising rather than
+            # waving through, so that the reason is recorded either way.
+            return report
+        approved = report.with_(approved_by=by)
+        await self._store.append(store.REPORTS, approved.id, approved.as_record())
+        audit.stdout_event(
+            "report_approved",
+            report_id=approved.id,
+            correlation_id=approved.correlation_id,
+            by=by,
+        )
+        return approved
+
+    async def awaiting_approval(self) -> list[Report]:
+        """Public-safe reports nobody has cleared yet. The owner's queue."""
+        return [
+            r
+            for r in await self.all_reports()
+            if r.is_public_safe
+            and not r.approved_by
+            and r.github_issue_number is None
+            and r.status in PUBLISHABLE_STATUSES
+        ]
 
     # -- publication ----------------------------------------------------------
 

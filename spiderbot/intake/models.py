@@ -23,6 +23,21 @@ from spiderbot import redact
 
 SCHEMA_VERSION = 1
 
+#: Every member-controlled field that reaches public output. ONE list, used by
+#: `Report.published_text()` (what the classifier reads) and asserted against
+#: `public_body()`'s source by `tests/test_intake.py`, so "published" and
+#: "scanned" cannot drift apart again. They already had: `evidence_format` was
+#: printed into the issue body and never classified.
+PUBLISHED_FIELDS: tuple[str, ...] = (
+    "title",
+    "description",
+    "repro_steps",
+    "device",
+    "build_version",
+    "ai_summary",
+    "evidence_format",
+)
+
 MAX_TITLE = 120
 MAX_DESCRIPTION = 4000
 MAX_STEPS = 2000
@@ -178,6 +193,9 @@ class Report:
     #: sets it only when the person presses confirm on the summary the bot
     #: showed them, which is the brief's own sequence.
     reporter_cleared: bool = True
+    #: Who cleared this for a PUBLIC issue. Empty means nobody, and nobody
+    #: means it stays private — see `may_publish`.
+    approved_by: str = ""
 
     status: Status = Status.DRAFT
     resolution: str = ""
@@ -205,11 +223,50 @@ class Report:
 
     @property
     def may_publish(self) -> bool:
+        """Whether this may become a PUBLIC GitHub issue.
+
+        **`approved_by` is the load-bearing condition, and it is here because
+        the first design was wrong in a way no amount of tuning fixes.** That
+        design published anything a keyword list did not object to — so "no
+        signal found" meant "safe", and:
+
+        - a plain, unobfuscated complaint about a named member, filed as a bug,
+          published verbatim;
+        - **every non-English report was unprotected** — the vocabulary is
+          English and this server's own language is Dutch;
+        - leetspeak, spaced-out words and contact details written as words all
+          published;
+        - a zero-width space inside each trigger word blinded the classifier
+          while the published text carried the words intact.
+
+        All four reproduced. A regex miss must not mean publish, so publication
+        now needs a person: the classifier PRE-SORTS the queue, which is what
+        it is genuinely good at, and its failure mode becomes "a moderator sees
+        it in the wrong bucket" rather than "it is on the internet".
+
+        At this server's volume — a handful of reports a week — one press is a
+        trivial cost for removing the entire class.
+        """
         return (
             self.is_public_safe
+            and bool(self.approved_by)
             and self.status in PUBLISHABLE_STATUSES
             and self.github_issue_number is None
         )
+
+    def published_text(self) -> str:
+        """Everything member-controlled that would reach a public issue.
+
+        **Cleaned the way it will be published.** That is the whole point and
+        it was the hole: `redact.clean` strips zero-width and control
+        characters on the way OUT, so a member writing `har<U+200B>assing` was
+        scanned as one string and published as another, with the trigger word
+        restored. The classifier now reads the same text the reader will.
+        """
+        parts = [redact.clean(getattr(self, name, "") or "") for name in PUBLISHED_FIELDS]
+        parts += [redact.clean(x) for x in self.ai_tags]
+        parts += [redact.clean(x) for x in self.evidence_summary]
+        return " ".join(p for p in parts if p)
 
     # -- rendering -----------------------------------------------------------
 
@@ -341,6 +398,7 @@ class Report:
             "sensitivity": str(self.sensitivity),
             "sensitivity_reason": self.sensitivity_reason,
             "reporter_cleared": self.reporter_cleared,
+            "approved_by": self.approved_by,
             "github_issue_number": self.github_issue_number,
             "github_issue_url": self.github_issue_url,
             "duplicate_of": self.duplicate_of,
@@ -387,6 +445,7 @@ class Report:
             sensitivity=sensitivity,
             sensitivity_reason=str(data.get("sensitivity_reason") or ""),
             reporter_cleared=bool(data.get("reporter_cleared", True)),
+            approved_by=str(data.get("approved_by") or ""),
             github_issue_number=data.get("github_issue_number"),
             github_issue_url=str(data.get("github_issue_url") or ""),
             duplicate_of=str(data.get("duplicate_of") or ""),

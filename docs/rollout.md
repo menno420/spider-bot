@@ -53,6 +53,12 @@ redeploy — which is the whole difference from what the forms did before.
 
 Owner mints the credential (below) and sets `INTAKE_PUBLISH_ENABLED=true`.
 
+**Nothing publishes itself even then.** A report reaches GitHub only when a
+person runs `/publish <id>`, because an adversarial review reproduced four ways
+a keyword classifier lets a complaint about a named member through — including
+every report written in Dutch. Home → **Reports** lists what is waiting for
+that decision.
+
 **Test it with a controlled report before a member does**: file one through the
 form, confirm the issue appears on `spider-swing`, confirm the issue body
 carries the intake id and **no Discord identity**, then run `/retryreports` and

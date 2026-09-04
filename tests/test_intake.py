@@ -43,6 +43,23 @@ def a_service(github=None) -> intake_service.IntakeService:
     return intake_service.IntakeService(store.InMemoryStore(), github)
 
 
+
+def file_and_approve(svc, **kw):
+    """File a report and have a human clear it for publication.
+
+    Publication now REQUIRES a named approver — `Report.may_publish` checks it
+    — because the first design let a keyword classifier decide, and that
+    classifier could not read this server's own language. Tests about
+    publication therefore go through the same gate a moderator does.
+    """
+    kw.setdefault("category", Category.BUG)
+    kw.setdefault("title", "t")
+    kw.setdefault("description", "d")
+    out = run(svc.file(**kw))
+    run(svc.approve(out.report.id, by="menno"))
+    return out
+
+
 class FakeGitHub:
     """A GitHub that can be made to fail, and that records every create."""
 
@@ -122,7 +139,7 @@ def test_a_report_is_durable_before_anything_is_published():
 def test_publication_returns_the_issue_reference_to_discord():
     github = FakeGitHub()
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     published = run(svc.publish(out.report.id))
     assert published.published
     assert published.report.github_issue_number == 100
@@ -132,7 +149,7 @@ def test_publication_returns_the_issue_reference_to_discord():
 def test_github_failing_leaves_the_report_queued_and_the_reporter_told_the_truth():
     github = FakeGitHub(fail=github_sink.PublishFailure("network", "boom", retryable=True))
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     result = run(svc.publish(out.report.id))
     assert not result.published
     assert result.report.status is Status.PUBLISH_FAILED
@@ -143,7 +160,7 @@ def test_github_failing_leaves_the_report_queued_and_the_reporter_told_the_truth
 def test_a_retry_after_an_outage_succeeds():
     github = FakeGitHub(fail=github_sink.PublishFailure("network", "boom"))
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     run(svc.publish(out.report.id))
     github.fail = None                       # the outage ends
     results = run(svc.retry_pending())
@@ -155,7 +172,7 @@ def test_a_retry_cannot_create_a_second_issue():
     """Five retries, one issue. The store record is the fast path."""
     github = FakeGitHub()
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     for _ in range(5):
         run(svc.publish(out.report.id))
     assert len(github.created) == 1
@@ -166,7 +183,7 @@ def test_a_retry_cannot_duplicate_even_if_the_store_forgot_the_issue_number():
     the record of it was lost."""
     github = FakeGitHub()
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     run(svc.publish(out.report.id))
     # Simulate the write of the publication result having been lost.
     forgotten = run(svc.get(out.report.id)).with_(
@@ -401,7 +418,7 @@ def test_the_retry_pass_is_bounded():
     github = FakeGitHub(fail=github_sink.PublishFailure("network", "boom"))
     svc = a_service(github)
     for index in range(15):
-        run(svc.file(category=Category.BUG, title=f"t{index}", description="d"))
+        file_and_approve(svc, title=f"t{index}")
     github.fail = None
     assert len(run(svc.retry_pending(limit=10))) == 10
 
@@ -444,7 +461,7 @@ def test_a_resolved_report_can_still_be_published():
     equals a silently dropped report."""
     github = FakeGitHub(fail=github_sink.PublishFailure("network", "down"))
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     run(svc.publish(out.report.id))
     run(svc.mark_resolved(out.report.id, "fixed in 0.46"))
     github.fail = None
@@ -460,12 +477,14 @@ def test_a_report_the_reporter_did_not_clear_is_not_published():
         sensitivity_reason="checked",
         reporter_cleared=False,
         status=Status.STORED,
+        approved_by="menno",
     ).may_publish
     assert a_report(
         sensitivity=Sensitivity.PUBLIC_SAFE,
         sensitivity_reason="checked",
         reporter_cleared=True,
         status=Status.STORED,
+        approved_by="menno",
     ).may_publish
 
 
@@ -488,7 +507,7 @@ def test_a_label_that_does_not_exist_does_not_lose_the_issue():
     and GitHub's docs do not say what happens to an unknown label name."""
     github = RejectsLabels()
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     result = run(svc.publish(out.report.id))
     assert result.published
     assert github.created[0][2] == []
@@ -498,7 +517,7 @@ def test_a_rejection_that_is_not_about_labels_still_fails():
     """The positive control: the bare retry must not swallow every 422."""
     github = FakeGitHub(fail=github_sink.PublishFailure("rejected", "title too long"))
     svc = a_service(github)
-    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    out = file_and_approve(svc)
     assert not run(svc.publish(out.report.id)).published
 
 
@@ -552,3 +571,130 @@ def test_a_very_long_first_sentence_is_trimmed_not_dropped():
 
     title, _ = summarise("x" * 300)
     assert len(title) <= 90 and title.endswith("...")
+
+
+# -- the publication gate, and why a classifier is not one --------------------
+#
+# Every case below reproduced against the FIRST design, which published
+# anything the keyword vocabulary did not object to. They are kept as tests
+# rather than as a note because the failure mode is silent and the fix is one
+# `and` clause away from being deleted by someone who finds it inconvenient.
+
+ZERO_WIDTH = "​"
+
+
+@pytest.mark.parametrize(
+    ("label", "description"),
+    [
+        (
+            "plain English naming a member",
+            "The panel freezes whenever Marcus Klein is in the lobby. Marcus calls "
+            "me names every night and tells everyone I cheat.",
+        ),
+        (
+            "Dutch - the server's own language",
+            "Het spel loopt vast als Marcus Klein in de lobby zit. Marcus scheldt "
+            "mij elke avond uit en pest de jongere testers.",
+        ),
+        (
+            "leetspeak",
+            "It freezes on level 3. That us3r Marcus k33ps h4rassing me, pls b4n h1m.",
+        ),
+        (
+            "contact details written as words",
+            "It freezes. You can reach Marcus at bob dot smith at gmail dot com.",
+        ),
+    ],
+)
+def test_a_report_the_classifier_misses_still_cannot_publish_itself(label, description):
+    """The classifier CANNOT catch these — an English keyword vocabulary never
+    will, and this server speaks Dutch. So publication does not depend on it."""
+    svc = a_service(FakeGitHub())
+    out = run(
+        svc.file(category=Category.BUG, title="Freeze", description=description,
+                 reporter=Reporter(user_id=1))
+    )
+    assert not out.report.may_publish, label
+    assert not run(svc.publish(out.report.id)).published, label
+
+
+def test_a_zero_width_space_cannot_split_the_scanned_text_from_the_published_text():
+    """`redact.clean` strips zero-width characters on the way OUT, so scanning
+    the raw field and publishing the cleaned one meant a member writing
+    `har<ZWSP>assing` was scanned as one string and published as another with
+    the word restored."""
+    hostile = (
+        f"The lobby freezes. Marcus keeps har{ZERO_WIDTH}assing the younger "
+        f"testers; reach him at marcus.klein{ZERO_WIDTH}@gmail.com"
+    )
+    decision = privacy.classify(a_report(description=hostile))
+    assert not decision.public
+    assert decision.signals
+
+
+def test_the_scanned_set_and_the_published_set_are_the_same_list():
+    """They drifted once: `evidence_format` was printed into the issue body and
+    never classified. One list now, and this asserts they cannot part again."""
+    import inspect
+
+    from spiderbot.intake.models import PUBLISHED_FIELDS
+
+    # Both halves of the public output: the title is rendered by public_title,
+    # the rest by public_body, and a field in neither would be dead weight in
+    # the scanned set — which is its own (smaller) kind of drift.
+    source = inspect.getsource(Report.public_body) + inspect.getsource(Report.public_title)
+    for name in PUBLISHED_FIELDS:
+        assert f"self.{name}" in source, f"{name} is scanned but never published"
+    published_text = a_report(
+        title="A", description="B", repro_steps="C", device="D",
+        build_version="E", ai_summary="F", evidence_format="G",
+        ai_tags=("H",), evidence_summary=("I",),
+    ).published_text()
+    for value in "ABCDEFGHI":
+        assert value in published_text, f"{value} reaches the issue but is not scanned"
+
+
+def test_publication_needs_a_named_human():
+    svc = a_service(FakeGitHub())
+    out = run(svc.file(category=Category.BUG, title="Freeze",
+                       description="It froze when I released the silk."))
+    assert out.report.sensitivity is Sensitivity.PUBLIC_SAFE
+    assert not out.report.may_publish, "public-safe is not the same as cleared"
+    approved = run(svc.approve(out.report.id, by="menno"))
+    assert approved.approved_by == "menno"
+    assert approved.may_publish
+    assert run(svc.publish(out.report.id)).published
+
+
+def test_a_private_report_cannot_be_approved_into_publication():
+    """Approving is not a way around the classifier's private verdict — it is a
+    way around its inability to be sure something is safe."""
+    svc = a_service(FakeGitHub())
+    out = run(svc.file(category=Category.COMPLAINT, title="x",
+                       description="This user keeps insulting me."))
+    unchanged = run(svc.approve(out.report.id, by="menno"))
+    assert unchanged.approved_by == ""
+    assert not unchanged.may_publish
+
+
+def test_the_owner_queue_shows_what_is_waiting_for_a_decision():
+    svc = a_service(FakeGitHub())
+    a = run(svc.file(category=Category.BUG, title="a", description="It froze."))
+    run(svc.file(category=Category.COMPLAINT, title="b", description="He insulted me."))
+    waiting = run(svc.awaiting_approval())
+    assert [r.id for r in waiting] == [a.report.id], "only public-safe, only unapproved"
+    run(svc.approve(a.report.id, by="menno"))
+    assert run(svc.awaiting_approval()) == []
+
+
+def test_the_receipt_no_longer_promises_a_github_issue():
+    """It used to, and the promise was made by a classifier that could not read
+    the language the member was writing in."""
+    svc = a_service(FakeGitHub())
+    out = run(svc.file(category=Category.BUG, title="t", description="It froze."))
+    assert "will file it" not in out.reporter_message
+    assert "Menno" in out.reporter_message
+
+
+def test_approval_survives_the_store_round_trip():
+    assert Report.from_record(a_report(approved_by="menno").as_record()).approved_by == "menno"

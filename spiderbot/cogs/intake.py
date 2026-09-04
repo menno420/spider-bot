@@ -35,7 +35,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit, ids, style
+from spiderbot import audit, ids, redact, style
 from spiderbot.intake.models import Category, Reporter
 from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
 
@@ -189,8 +189,10 @@ class ConfirmFiling(
             ),
             view=None,
         )
-        if outcome.ok and outcome.report.may_publish:
-            await service.publish(outcome.report.id)
+        # Deliberately NOT published here. It cannot be — `may_publish` needs a
+        # named human approver — and that is the point: the conversational path
+        # is the easiest one for a member to steer, so it is the last one that
+        # should reach a public tracker unattended.
 
 
 class DismissFiling(
@@ -330,6 +332,45 @@ class IntakeCog(commands.Cog):
             "complaint": ComplaintModal,
         }[kind.value]
         await interaction.response.send_modal(modal(self.bot))
+
+    @app_commands.command(
+        name="publish", description="Put a saved report on the game's issue tracker"
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(report_id="The reference, e.g. SB-R-...")
+    async def publish(self, interaction: discord.Interaction, report_id: str) -> None:
+        """The publication gate, and it is a person.
+
+        A keyword classifier cannot be the last thing between a member's words
+        and a public page — it could not read this server's own language. So
+        the classifier sorts and a human decides.
+        """
+        service = getattr(self.bot, "intake", None)
+        if service is None:
+            await interaction.response.send_message(
+                "Intake is not configured.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        report = await service.get(report_id.strip())
+        if report is None:
+            await interaction.followup.send(
+                f"No report `{redact.one_line(report_id, limit=40)}`.", ephemeral=True
+            )
+            return
+        if not report.is_public_safe:
+            await interaction.followup.send(
+                f"`{report.id}` is marked **private** and will not be published.\n"
+                f"Why: {report.sensitivity_reason}",
+                ephemeral=True,
+            )
+            return
+        approved = await service.approve(report.id, by=str(interaction.user))
+        result = await service.publish(approved.id)
+        await interaction.followup.send(
+            result.reporter_message or f"Could not publish: {result.failure}",
+            ephemeral=True,
+        )
 
     @app_commands.command(
         name="retryreports", description="Retry reports that could not reach GitHub"

@@ -140,18 +140,40 @@ is serialised per report id. The residual race — two truly concurrent publishe
 inside one search window — is stated in `github_sink.py` rather than papered
 over; this deployment runs one worker.
 
-**Private by default, at the boundary that matters.** *"The game is way too
-hard"* is product feedback; *"this user keeps insulting me"* is not.
-Deterministic signals decide, and the AI is a **one-way lever**: it can make a
-report private and cannot make one public that the deterministic pass did not
-already clear. A model failure arrives as `None` and loosens nothing.
-`Sensitivity.UNCLASSIFIED` is the initial value and `is_public_safe` is false
-for it — the default is what happens when nothing decides.
+**Publication needs a person, and the classifier is a SORTER not a gate.**
+This is the design's most important correction, and it came from an adversarial
+review reproducing four attacks against the first version — which published
+anything the keyword vocabulary did not object to:
 
-**The scanned set is the published set.** `privacy.classify` reads every field
-`public_body()` publishes. That equality is a rule, not a coincidence: adding a
-field to the body without adding it to the classifier is how an email address
-typed into the device box gets published.
+- a plain, unobfuscated complaint about a named member, filed as a bug, published;
+- **every non-English report was unprotected** — the vocabulary is English and
+  this server's own language is Dutch;
+- leetspeak, spaced-out words and contact details written as words all published;
+- a zero-width space inside each trigger word blinded the classifier while
+  `redact.clean` restored the words on the way out, so the scanned string and
+  the published string were different strings.
+
+A regex miss must not mean publish. `Report.may_publish` therefore requires a
+named `approved_by`, set only by `IntakeService.approve` and reached only from
+a staff command. The classifier still runs and still matters — it pre-sorts the
+queue and marks the obvious cases private — but its failure mode is now "a
+moderator sees it in the wrong bucket" rather than "it is on the internet". At
+a handful of reports a week, one press is a trivial price for removing the
+class entirely.
+
+*"The game is way too hard"* is product feedback; *"this user keeps insulting
+me"* is not; and the AI remains a **one-way lever** that can only make a report
+*more* private. `Sensitivity.UNCLASSIFIED` is the initial value and
+`is_public_safe` is false for it — the default is what happens when nothing
+decides.
+
+**The scanned set is the published set — one list, guarded by a test.**
+`PUBLISHED_FIELDS` in `intake/models.py` is the single definition;
+`Report.published_text()` is what the classifier reads, and a test asserts
+every name in it appears in `public_title`/`public_body`'s source. They had
+already drifted: `evidence_format` was printed into the issue body and never
+classified. The text is also **cleaned the way it will be published**, which is
+what closes the zero-width-space split above.
 
 **`public_body()` is an allow-list.** It is assembled from named fields rather
 than by removing private ones, so a field added later is absent by default

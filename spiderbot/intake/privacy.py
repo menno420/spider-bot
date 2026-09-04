@@ -118,25 +118,12 @@ def classify(report: Report, *, ai_says_private: bool | None = None) -> Classifi
     nothing. A model cannot clear a report the deterministic pass held back,
     and a model failure (which arrives as `None`) cannot loosen anything.
     """
-    # EVERY field `Report.public_body` publishes is scanned, not just the
-    # obvious three. `device`, `ai_summary` and the evidence lines all reach a
-    # public issue, and a member typing an email address into the device box
-    # would otherwise have it published — the classifier would never have seen
-    # it. The rule is: the scanned set is the published set.
-    text = " ".join(
-        part
-        for part in (
-            report.title,
-            report.description,
-            report.repro_steps,
-            report.device,
-            report.build_version,
-            report.ai_summary,
-            " ".join(report.ai_tags),
-            " ".join(report.evidence_summary),
-        )
-        if part
-    )
+    # The classifier reads EXACTLY the text that would be published, cleaned
+    # the way it will be published (`Report.published_text`). Two holes closed:
+    # a field printed into the body but absent from the scanned tuple, and a
+    # zero-width space inside a trigger word blinding the scan while the
+    # published text carried the word intact.
+    text = report.published_text()
 
     if report.category is Category.COMPLAINT:
         return Classification(
@@ -172,6 +159,16 @@ def classify(report: Report, *, ai_says_private: bool | None = None) -> Classifi
         f"{CATEGORY_LABELS[report.category].lower()} about the game, with no "
         "sign of anything about a specific person",
     )
+
+
+# A note that belongs beside the code rather than in a document: this
+# classifier is a SORTER, not a gate. `Report.may_publish` additionally
+# requires a named human approver, because a keyword vocabulary in one language
+# cannot be the last thing standing between a member's words and a public
+# tracker — and this server's own language is not the one the vocabulary is
+# written in. What `classify` buys is that the staff queue is already in the
+# right order, and that the obvious cases are marked private before anyone
+# looks. What it must never buy is publication.
 
 
 def apply(report: Report, *, ai_says_private: bool | None = None) -> Report:

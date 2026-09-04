@@ -80,8 +80,13 @@ async def main():
         device="Pixel 7a, Android 15", repro_steps="Swing, reel in, release at the apex.",
         reporter=M.Reporter(user_id=555, display_name="rin", channel_id=9))
     print("  member sees:", out.reporter_message)
+    print("  classifier:  ", out.report.sensitivity, "-", out.report.sensitivity_reason[:60])
+    print("  may publish? ", out.report.may_publish, "  <- nobody has cleared it yet")
+    print("  owner queue: ", [r.id for r in await svc.awaiting_approval()])
+    await svc.approve(out.report.id, by="menno")
+    print("  menno runs /publish ...")
     pub = await svc.publish(out.report.id)
-    print("  then sees:  ", pub.reporter_message)
+    print("  member then sees:", pub.reporter_message)
     print("\n  --- THE PUBLIC GITHUB ISSUE ---")
     title, body, labels = ghc.created[0]
     print("  title:", title); print("  labels:", labels)
@@ -93,6 +98,7 @@ async def main():
     o = await svc2.file(category=M.Category.BUG, title="Bird clips walls",
         description="The bird caught me through a wall in Storm Ridge.",
         reporter=M.Reporter(user_id=1))
+    await svc2.approve(o.report.id, by="menno")
     print("  saved:", o.reporter_message)
     f = await svc2.publish(o.report.id)
     print("  publish fails:", f.reporter_message)
@@ -119,12 +125,34 @@ async def main():
         title="@menno420 look at #1",
         description="ping @everyone see #1 and menno420/fleet-manager#2\n```\nhidden\n```",
         reporter=M.Reporter(user_id=2))
+    await svc4.approve(o4.report.id, by="menno")
     await svc4.publish(o4.report.id)
     t4, b4, _ = g4.created[0]
     print("  issue title:", repr(t4))
     print("  live @mention in body? ", "@menno420" in b4 or "@everyone" in b4)
     print("  live #ref in body?    ", "#1 " in b4)
     print("  fence in body?        ", "```" in b4)
+
+    H("JOURNEY 4b — the classifier misses, and it still cannot publish itself")
+    st4b = store.InMemoryStore()
+    g4b = FakeGH()
+    svc4b = isvc.IntakeService(st4b, g4b)
+    for label, desc in [
+        ("plain English naming a member",
+         "The panel freezes whenever Marcus Klein is in the lobby. "
+         "Marcus calls me names every night."),
+        ("Dutch - the server's own language",
+         "Het spel loopt vast als Marcus Klein in de lobby zit. "
+         "Marcus scheldt mij elke avond uit."),
+    ]:
+        o = await svc4b.file(category=M.Category.BUG, title="Freeze",
+                             description=desc, reporter=M.Reporter(user_id=4))
+        r = await svc4b.publish(o.report.id)
+        print(f"  {label}")
+        print(f"    classifier says: {o.report.sensitivity} (it cannot read this)")
+        print(f"    published: {r.published}  reason: {r.failure}")
+    print(f"  issues created: {len(g4b.created)} <- must be 0")
+    print("  the classifier SORTS; a person DECIDES. That is the whole gate.")
 
     # -------------------------------------------------------------- EVIDENCE
     H("JOURNEY 5 — a tester attaches run evidence")
@@ -149,6 +177,7 @@ async def main():
         title="Impossible around 5 km", description="I cannot get past about 5 km on standard.",
         evidence_summary=tuple(ev.summary_lines(redact.for_github)),
         evidence_format=evidence.SUPPORTED_FORMAT, reporter=M.Reporter(user_id=3))
+    await svc5.approve(o5.report.id, by="menno")
     await svc5.publish(o5.report.id)
     print("\n  --- the issue's run-evidence section ---")
     b5 = g5.created[0][1]

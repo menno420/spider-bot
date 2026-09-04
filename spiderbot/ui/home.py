@@ -351,18 +351,28 @@ class HomePanel(Panel):
         await interaction.response.defer(ephemeral=True)
         reports = await service.all_reports()
         pending = await service.pending_publication()
+        waiting = await service.awaiting_approval()
         lines = [
-            f"**{len(reports)}** reports · **{len(pending)}** waiting to reach GitHub",
+            f"**{len(reports)}** reports · **{len(waiting)}** waiting for you to "
+            f"publish · **{len(pending)}** approved and queued for GitHub",
             "",
         ]
+        if waiting:
+            lines.append("**Waiting for your decision** — `/publish <id>`")
+            lines += [f"· {_staff_report_line(r)}" for r in waiting[:6]]
+            lines.append("")
         for report in reports[:12]:
             lines.append(_staff_report_line(report))
+        lines += [
+            "",
+            "*Nothing reaches the public tracker until you publish it. The "
+            "classifier sorts; it does not decide.*",
+        ]
         if pending:
-            lines += [
-                "",
-                "*Waiting reports retry automatically. A GitHub outage delays "
-                "them; it does not lose them.*",
-            ]
+            lines.append(
+                "*Approved reports retry automatically — a GitHub outage delays "
+                "them, it does not lose them.*"
+            )
         await interaction.followup.send(
             embed=style.embed(
                 title=f"{style.BUG} Reports",
