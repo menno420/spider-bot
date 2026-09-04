@@ -247,7 +247,14 @@ class SpiderBot(commands.Bot):
             )
 
         case_channel = self.channels.get(cfg.ch_case_state)
-        if cfg.mod_mode != "off" and case_channel is not None:
+        if self.moderation is not None:
+            # Same reasoning as the intake service above, and Codex,
+            # spider-bot#3, 2026-09-04 caught that only intake had it: replacing
+            # this clears `_last_scan` and `_scan_times`, so the per-member
+            # cooldown and the hourly cap restarted on every gateway reconnect
+            # — and a reconnect is exactly when a flood is plausible.
+            log.debug("moderation service already built; keeping it across the reconnect")
+        elif cfg.mod_mode != "off" and case_channel is not None:
             try:
                 ceiling = Operation(cfg.mod_ceiling)
             except ValueError:

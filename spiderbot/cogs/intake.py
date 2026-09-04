@@ -204,11 +204,20 @@ class ConfirmFiling(
     async def _file_once(self, interaction, service, backing, draft, bot) -> None:
         draft = await backing.get(DRAFTS, self.draft_id) or draft
         already = draft.get("filed_report_id")
-        if already:
+        if already and await service.get(already) is not None:
             await safe_followup(
                 interaction, f"Already saved as `{already}`.", ephemeral=True
             )
             return
+        if already:
+            # Claimed, but the report is not there: the process stopped between
+            # the claim and the file, or the report write failed. Codex,
+            # spider-bot#3, 2026-09-04: the claim was treated as proof that
+            # filing had completed, so this window LOST the report and told the
+            # member it was saved. The claim is a reservation, not a receipt —
+            # resume it under the same id, which is what makes the id worth
+            # claiming in the first place.
+            log.warning("intake: resuming interrupted filing of %s", already)
         try:
             category = Category(draft.get("category", "general"))
         except ValueError:
@@ -221,7 +230,7 @@ class ConfirmFiling(
         # report. Claiming first makes the draft the record of intent: a
         # restart finds it already claimed, and the id is stable, so filing
         # again would overwrite one report rather than mint two.
-        report_id = ids.report_id()
+        report_id = already or ids.report_id()
         claimed = await backing.append(
             DRAFTS, self.draft_id, {**draft, "filed_report_id": report_id}
         )
@@ -302,10 +311,24 @@ class DismissFiling(
             return
         backing = getattr(getattr(interaction.client, "intake", None), "_store", None)
         draft = await backing.get(DRAFTS, self.draft_id) if backing else None
-        # A draft that has expired out of the store is nobody's to protect and
-        # the button is dead anyway, so an unknown draft is dismissible: the
-        # failure direction is a stale panel someone can tidy, not a live
-        # report someone else can silence.
+        if draft is None and backing is not None and not await _store_readable(backing):
+            # `get` returns None for BOTH "no such draft" and "the store could
+            # not be read". Codex, spider-bot#3, 2026-09-04: during a transient
+            # read failure — a cold-scan timeout after a restart — another
+            # member pressing this public button passed the ownership check and
+            # removed someone else's live offer. When absence cannot be
+            # distinguished from unavailability, refuse.
+            await safe_followup(
+                interaction,
+                "I cannot check whose report that is right now - try again in a "
+                "moment.",
+                ephemeral=True,
+            )
+            return
+        # A draft that has genuinely expired out of a READABLE store is nobody's
+        # to protect and the button is dead anyway, so it stays dismissible: the
+        # failure direction is a stale panel someone can tidy, not a live report
+        # someone else can silence.
         if draft is not None and draft.get("user_id") != interaction.user.id:
             await safe_followup(
                 interaction, "That is someone else's report.", ephemeral=True
@@ -313,6 +336,26 @@ class DismissFiling(
             return
         await safe_edit(interaction, content="No problem.", embed=None, view=None)
         audit.stdout_event("intake_offer_declined", user=str(interaction.user))
+
+
+async def _store_readable(backing) -> bool:
+    """Whether the store can answer at all right now.
+
+    `Store.get` returns None for a missing key and for a failed read alike, so
+    a caller that must tell those apart asks the store to load a collection: a
+    healthy store returns a dict (possibly empty) and an unreachable one is
+    caught by `DiscordChannelStore` itself and comes back empty after logging.
+    The distinguishing signal is `available` plus a successful index build.
+    """
+    if not getattr(backing, "available", True):
+        return False
+    ensure = getattr(backing, "_ensure_index", None)
+    if ensure is None:
+        return True  # an in-memory store is always readable
+    try:
+        return bool(await ensure())
+    except Exception:  # noqa: BLE001 — a probe must never break a callback
+        return False
 
 
 async def read_evidence(message) -> tuple[tuple[str, ...], str]:

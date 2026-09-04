@@ -31,6 +31,8 @@ the bot's own embed.
 from __future__ import annotations
 
 import logging
+import time
+from collections import deque
 
 import discord
 from discord.ext import commands
@@ -40,10 +42,23 @@ from spiderbot import audit, redact, style
 log = logging.getLogger("spiderbot.serverlog")
 
 
+#: How many deletion notices reach the mod log in a window, and how wide the
+#: window is. Codex, spider-bot#3, 2026-09-04: every deletion produced one
+#: embed with no cooldown or cap, so a member could post-and-delete repeatedly
+#: to bury moderation cases and private-report alerts under their own noise —
+#: and fill the bot's HTTP queue doing it. Past the cap the notices are counted
+#: rather than posted, and one line says how many were withheld, so a flood is
+#: VISIBLE as a flood instead of drowning what matters.
+DELETION_LOG_CAP = 10
+DELETION_LOG_WINDOW_S = 60.0
+
+
 class ServerLogCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.cfg = bot.cfg
+        self._deletion_times: deque[float] = deque(maxlen=DELETION_LOG_CAP * 4)
+        self._deletions_withheld = 0
 
     @property
     def _log_channel(self):
@@ -51,6 +66,23 @@ class ServerLogCog(commands.Cog):
 
     async def _post(self, title: str, description: str, colour) -> None:
         await audit.modlog_event(self._log_channel, title, description, colour)
+
+    def _deletion_budget(self) -> bool:
+        """Whether this deletion notice may be posted.
+
+        Deletion is the one mod-log event an ordinary member drives directly:
+        post, delete, repeat. Past the cap the notices are counted instead of
+        posted and the next one that fits says how many were withheld — so a
+        flood reads AS a flood rather than as the mod log filling with noise.
+        """
+        now = time.time()
+        cutoff = now - DELETION_LOG_WINDOW_S
+        while self._deletion_times and self._deletion_times[0] <= cutoff:
+            self._deletion_times.popleft()
+        if len(self._deletion_times) >= DELETION_LOG_CAP:
+            return False
+        self._deletion_times.append(now)
+        return True
 
     def _in_guild(self, obj) -> bool:
         guild = getattr(obj, "guild", None)
@@ -159,6 +191,23 @@ class ServerLogCog(commands.Cog):
                 f"in {where} was deleted:\n>>> "
                 + redact.for_discord(cached.content or "(no text)", limit=900)
             )
+        if not self._deletion_budget():
+            self._deletions_withheld += 1
+            if self._deletions_withheld == 1:
+                await self._post(
+                    f"{style.WARN} Deletions are being logged too fast",
+                    "More than "
+                    f"{DELETION_LOG_CAP} messages were deleted in "
+                    f"{DELETION_LOG_WINDOW_S:.0f} seconds, so I have stopped "
+                    "posting one notice each — otherwise a flood buries the "
+                    "cases and reports you actually need to see. Discord's own "
+                    "audit log has every deletion.",
+                    style.WARNING,
+                )
+            return
+        if self._deletions_withheld:
+            withheld, self._deletions_withheld = self._deletions_withheld, 0
+            body = f"_{withheld} earlier deletion notice(s) were withheld._\n\n" + body
         await self._post(f"{style.WARN} Message deleted", body, style.WARNING)
         audit.stdout_event(
             "server_message_deleted",

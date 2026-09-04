@@ -397,6 +397,39 @@ class ComplaintModal(discord.ui.Modal, title="Tell Menno something"):
             title=str(self.summary.value),
             description=str(self.details.value),
         )
+        if outcome is None or not outcome.ok:
+            # Codex, spider-bot#3, 2026-09-04: with no `#intake-state` channel —
+            # an explicitly supported degraded startup — this path threw the
+            # title and the details away, posted a mod-log note whose reference
+            # was `?`, and told the member Menno would see it. A complaint is
+            # the one report that may name a person and describe what they did.
+            # Losing it while saying otherwise is the worst outcome this form
+            # has, and it is worse than refusing: a refusal, the member can act
+            # on.
+            log.error("complaint could not be stored; refusing rather than pretending")
+            await safe_followup(
+                interaction,
+                embed=_receipt_embed(
+                    self.bot,
+                    "I could not save that",
+                    "Something is wrong with where I keep private reports, so I "
+                    "have NOT written this down and Menno will not see it. "
+                    "Please tell him directly - and I am sorry, that is the "
+                    "wrong answer to give someone reporting something private.",
+                ),
+                ephemeral=True,
+            )
+            await audit.modlog_event(
+                self.bot.channels.get("mod-log"),
+                f"{style.WARN} A private report could not be stored",
+                "Someone tried to send a private report and I could not keep it. "
+                "The content is NOT in this message and was not written down "
+                "anywhere. Check that the private state channel exists and that "
+                "I can write to it.",
+                style.ALARM,
+            )
+            audit.stdout_event("complaint_lost", user=str(interaction.user))
+            return
         # Deliberately NOT posted to a public forum. The only place it goes is
         # the private store and a staff-only note.
         await audit.modlog_event(

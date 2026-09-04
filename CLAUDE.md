@@ -319,6 +319,24 @@ structural change - that plan outranks preferences you arrive with.
     and True in `from_record`, so any record written before the field existed
     deserialised as consented. Three defaults, one rule.
 
+53. **A fix creates a surface. Check the fix.** Three of round 3's eight
+    findings were consequences of round 2's fixes: the edit listener was
+    suppressed by the cooldown the ORIGINAL message armed, the durable draft
+    claim was read as proof that filing had completed, and only intake got the
+    reconnect guard. The pattern is not carelessness — a fix moves where the
+    problem is, and the new place has not been looked at by anyone.
+
+54. **A degraded mode must refuse, not pretend.** With no `#intake-state`
+    channel the complaint form threw the content away, posted a mod-log note
+    whose reference was `?`, and told the member Menno would see it. Unconfigured
+    is silent (invariant 4) — but *silent* is about features nobody invoked, not
+    about a person who just typed something private and pressed send.
+
+55. **A row is a row when it carries the producer's fields.** An export
+    containing `{"record_id": "x"}` produced `ok=True` and a summary of measured
+    zeroes, under a line saying it was validated against the game's committed
+    schema. An absent measurement is not a measurement of zero.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

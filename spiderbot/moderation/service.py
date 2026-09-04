@@ -89,16 +89,24 @@ class ModerationService:
         lines += self._policy.describe()
         return lines
 
-    def _within_budget(self, user_id: int) -> bool:
+    def _within_budget(self, user_id: int, *, reason: str = "message") -> bool:
         """Record this classification and say whether it is inside the budget.
 
         Two brakes, because they answer different questions: a per-member
         cooldown stops one person driving the classifier, and a global hourly
         cap stops any number of people doing it together. Both count ATTEMPTS
         at the model call, which is the thing being spent.
+
+        An EDIT skips the per-member cooldown and honours the global cap.
+        Codex, spider-bot#3, 2026-09-04: without that, the cooldown the
+        original message had just armed suppressed the edit, so the edit path
+        did nothing in exactly the case it exists for — post something
+        harmless, edit it into abuse a second later. An edit is not extra
+        volume a member chose to send; it is the same message changing under a
+        judgement that has already been made.
         """
         now = self._now()
-        if now - self._last_scan.get(user_id, 0.0) < SCAN_COOLDOWN_S:
+        if reason != "edit" and now - self._last_scan.get(user_id, 0.0) < SCAN_COOLDOWN_S:
             return False
         hour_ago = now - 3600
         while self._scan_times and self._scan_times[0] <= hour_ago:
@@ -111,7 +119,9 @@ class ModerationService:
 
     # -- the pipeline ---------------------------------------------------------
 
-    async def handle_message(self, message, *, bot_user_id: int | None) -> Case | None:
+    async def handle_message(
+        self, message, *, bot_user_id: int | None, reason: str = "message"
+    ) -> Case | None:
         """One message through the whole path. Returns the case, or None if the
         message never entered the pipeline. Never raises."""
         if self.mode is Mode.OFF:
@@ -126,7 +136,7 @@ class ModerationService:
 
         author = message.author
         channel_name = prechecks.watched_name(getattr(message, "channel", None))
-        if not self._within_budget(getattr(author, "id", 0)):
+        if not self._within_budget(getattr(author, "id", 0), reason=reason):
             # Codex, spider-bot#3, 2026-09-04: every qualifying message started
             # an external classifier call with no per-member limit, no global
             # budget and no concurrency bound anywhere in this path — so one

@@ -1107,3 +1107,79 @@ def test_a_clamped_case_is_not_counted_as_an_action():
     acting = a_service(mode="shadow", text=verdict_json())
     real = run(acting.handle_message(a_message(), bot_user_id=999))
     assert real.would_have_acted
+
+
+# -- what Codex found at 5c0c360 ----------------------------------------------
+
+
+def _edit_cog(service):
+    from spiderbot.cogs.moderation import ModerationCog
+
+    cog = ModerationCog.__new__(ModerationCog)
+    cog.bot = types.SimpleNamespace(
+        moderation=service, user=types.SimpleNamespace(id=999), channels={}
+    )
+    cog.cfg = CFG
+    return cog
+
+
+def test_an_edit_is_not_suppressed_by_the_original_messages_cooldown():
+    """Codex, spider-bot#3, 2026-09-04, and this is the sharp one: the edit
+    listener delegated to `on_message`, which hits the per-member cooldown the
+    ORIGINAL message had just armed — so the edit path did nothing in exactly
+    the case it exists for. Post something harmless, edit it into abuse a
+    second later."""
+    gateway = FakeGateway(verdict_json())
+    service = a_service(mode="shadow")
+    service._classifier = Classifier(gateway)
+    cog = _edit_cog(service)
+
+    before = a_message("the reel feels a bit weak on this build")
+    run(cog.on_message(before))
+    after = a_message("you are worthless and everyone here knows it")
+    run(cog.on_message_edit(before, after))
+    assert len(gateway.calls) == 2, "the edited content must be judged"
+
+    # Positive control: an ordinary second MESSAGE from the same member is
+    # still held by the cooldown — the exemption is for edits, not a hole.
+    run(cog.on_message(a_message("and another thing entirely")))
+    assert len(gateway.calls) == 2
+
+
+def test_an_edit_to_an_uncached_message_is_still_judged():
+    """`on_message_edit` fires only when the original is in discord.py's
+    bounded cache — so after a restart, or once a message ages out, editing it
+    into abuse ran nothing at all."""
+    gateway = FakeGateway(verdict_json())
+    service = a_service(mode="shadow")
+    service._classifier = Classifier(gateway)
+    cog = _edit_cog(service)
+
+    payload = types.SimpleNamespace(
+        cached_message=None, message=a_message("you are worthless and everyone knows it")
+    )
+    run(cog.on_raw_message_edit(payload))
+    assert len(gateway.calls) == 1
+
+    # Positive control: when the message WAS cached the typed listener has it,
+    # and the raw one must not judge it a second time.
+    cached = a_message("something else")
+    run(cog.on_raw_message_edit(types.SimpleNamespace(cached_message=cached, message=cached)))
+    assert len(gateway.calls) == 1
+
+
+def test_the_edit_exemption_still_honours_the_global_cap():
+    """The cooldown is what an edit skips. The cap is what bounds the spend,
+    and an edit is not exempt from it."""
+    from spiderbot.moderation import service as msvc
+
+    gateway = FakeGateway(verdict_json())
+    service = a_service(mode="shadow")
+    service._classifier = Classifier(gateway)
+    service._scan_times.extend([service._now()] * msvc.SCAN_HOURLY_CAP)
+    cog = _edit_cog(service)
+
+    before = a_message("harmless")
+    after = a_message("you are worthless and everyone here knows it")
+    run(cog.on_message_edit(before, after))
+    assert gateway.calls == []

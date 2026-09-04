@@ -130,3 +130,29 @@ def test_a_ban_is_logged_as_an_alarm():
     guild = types.SimpleNamespace(id=CFG.guild_id)
     run(ServerLogCog(bot).on_member_ban(guild, member()))
     assert "banned" in posted(bot).lower()
+
+
+def test_a_deletion_flood_cannot_bury_the_mod_log():
+    """Codex, spider-bot#3, 2026-09-04: deletion is the one mod-log event an
+    ordinary member drives directly — post, delete, repeat — and it had no
+    cooldown, no batching and no cap, so a flood could bury moderation cases
+    and private-report alerts while filling the bot's HTTP queue."""
+    from types import SimpleNamespace
+
+    from spiderbot.cogs.serverlog import DELETION_LOG_CAP
+
+    bot = a_bot()
+    cog = ServerLogCog(bot)
+    log_channel = bot.channels["mod-log"]
+
+    for n in range(DELETION_LOG_CAP * 5):
+        payload = SimpleNamespace(
+            guild_id=cog.cfg.guild_id, channel_id=1, cached_message=None, message_id=n
+        )
+        run(cog.on_raw_message_delete(payload))
+
+    posted = len(log_channel.sent)
+    assert posted <= DELETION_LOG_CAP + 1, f"{posted} embeds for a flood"
+    # And the flood is VISIBLE as a flood rather than silently dropped.
+    titles = " ".join(kw["embed"].title for _a, kw in log_channel.sent if kw.get("embed"))
+    assert "too fast" in titles

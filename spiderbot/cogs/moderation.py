@@ -194,7 +194,42 @@ class ModerationCog(commands.Cog):
         """
         if (before.content or "") == (after.content or ""):
             return
-        await self.on_message(after)
+        await self._judge_edit(after)
+
+    @commands.Cog.listener()
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        """The same, for a message discord.py never cached.
+
+        Codex, spider-bot#3, 2026-09-04: `on_message_edit` fires only when the
+        original is in the bounded in-memory cache — so after a restart, or
+        once a message ages out, editing it into abuse ran nothing at all. The
+        raw event always fires; `payload.cached_message` being present means
+        the typed listener above already handled it.
+        """
+        if payload.cached_message is not None:
+            return
+        message = getattr(payload, "message", None)
+        if message is None:
+            return
+        await self._judge_edit(message)
+
+    async def _judge_edit(self, message: discord.Message) -> None:
+        """Route edited content through the same pipeline, exempt from the
+        member cooldown but NOT from the global cap.
+
+        Codex, spider-bot#3, 2026-09-04: delegating to `on_message` meant the
+        cooldown the ORIGINAL message had just armed suppressed the edit — so
+        the edit listener did nothing in exactly the case it exists for. An
+        edit is not extra volume a member chose to send; it is the same message
+        changing under a judgement already made, and the global hourly cap
+        still bounds the spend.
+        """
+        service = getattr(self.bot, "moderation", None)
+        if service is None:
+            return
+        await service.handle_message(
+            message, bot_user_id=getattr(self.bot.user, "id", None), reason="edit"
+        )
 
     @app_commands.command(
         name="modact", description="Take a moderation action, recorded as a case"

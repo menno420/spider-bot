@@ -74,6 +74,17 @@ MAX_BYTES = 512 * 1024
 #: The producer's own `HISTORY_LIMIT` (`run_record_ledger.gd`). A file claiming
 #: more did not come from the game.
 MAX_RECORDS = 100
+#: What the producer writes on every row. A record missing any of these is not
+#: an incomplete record to render with zeroes — it is not one of these records.
+#: Deliberately the MEASUREMENTS and the classification, not every optional
+#: field: an export from a slightly older build should still be readable, and
+#: `unrecognised` already reports a value outside the catalogue.
+REQUIRED_RECORD_FIELDS: tuple[str, ...] = (
+    "difficulty_id",
+    "terminal_outcome",
+    "final_distance_pixels",
+    "active_duration_seconds",
+)
 
 PIXELS_PER_METRE = 10.0
 
@@ -383,6 +394,18 @@ def _summarise_record(record: dict[str, Any]) -> RunSummary | None:
     record_id = _text(record.get("record_id"), limit=64)
     if not record_id:
         return None  # the producer rejects these too
+    missing = [field for field in REQUIRED_RECORD_FIELDS if field not in record]
+    if missing:
+        # Codex, spider-bot#3, 2026-09-04: a record was accepted on a non-empty
+        # `record_id` alone, so `{"record_id": "x"}` inside a correctly wrapped
+        # export produced `ok=True` and a summary reading "0 m on unknown in 0s
+        # — unknown", published under a line saying it was validated against
+        # the game's committed schema. Every absent measurement rendered as a
+        # measured zero. A row that does not carry the producer's fields is not
+        # a row this module can summarise; it is skipped and counted, which is
+        # what `skipped_records` is for.
+        log.debug("evidence: record %s is missing %s", record_id, ",".join(missing))
+        return None
 
     unrecognised: list[str] = []
     bounds = _Bounds()

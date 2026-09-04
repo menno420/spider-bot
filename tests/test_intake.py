@@ -1343,3 +1343,96 @@ def test_run_evidence_attached_to_a_message_reaches_the_report():
     [d2] = list(run(bot2.intake._store.load(intake_cog.DRAFTS)).values())
     assert d2["evidence_format"] == ""
     assert d2["title"]
+
+
+def test_a_claim_that_never_became_a_report_is_resumed_not_assumed():
+    """Codex, spider-bot#3, 2026-09-04: the durable claim was treated as proof
+    that filing had COMPLETED, so a stop between the claim and the file lost
+    the report and told the member it was saved."""
+    svc = a_service()
+    draft_id = _offer(svc, user_id=42)
+    # A claim with no report behind it: exactly the restart window.
+    draft = run(svc._store.get(intake_cog.DRAFTS, draft_id))
+    run(svc._store.append(
+        intake_cog.DRAFTS, draft_id, {**draft, "filed_report_id": "SB-R-ORPHAN"}
+    ))
+
+    interaction = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    interaction.client = _Bot(svc)
+    run(intake_cog.ConfirmFiling(draft_id).callback(interaction))
+
+    reports = run(svc.all_reports())
+    assert len(reports) == 1
+    assert reports[0].id == "SB-R-ORPHAN", "resumed under the claimed id"
+
+    # Positive control: a claim WITH its report still short-circuits.
+    again = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    again.client = _Bot(svc)
+    run(intake_cog.ConfirmFiling(draft_id).callback(again))
+    assert len(run(svc.all_reports())) == 1
+    assert "Already saved" in _said(again)
+
+
+def test_a_dismiss_is_refused_when_the_store_cannot_be_read():
+    """`get` returns None for BOTH "no such draft" and "the store could not be
+    read", so during a transient read failure another member could pass the
+    ownership check and remove someone else's live offer."""
+    svc = a_service()
+    _offer(svc, user_id=42)
+
+    class Unreadable(store.InMemoryStore):
+        available = True
+
+        async def get(self, collection, key):
+            return None
+
+        async def _ensure_index(self):
+            return False
+
+    svc._store = Unreadable()
+    stranger = FakeInteraction(guild=None, user=FakeUser(99, "stranger"))
+    stranger.client = _Bot(svc)
+    run(intake_cog.DismissFiling("SB-R-DRAFT01").callback(stranger))
+    assert stranger.response.edits == [], "the offer must survive an unreadable store"
+    assert "cannot check" in _said(stranger)
+
+    # Positive control: a genuinely absent draft in a READABLE store is still
+    # dismissible, so the refusal is about unavailability and not about strictness.
+    fresh = a_service()
+    ok = FakeInteraction(guild=None, user=FakeUser(99, "stranger"))
+    ok.client = _Bot(fresh)
+    run(intake_cog.DismissFiling("SB-R-GONE").callback(ok))
+    assert ok.response.edits and ok.response.edits[0]["content"] == "No problem."
+
+
+def test_a_private_report_with_nowhere_to_go_is_refused_not_lost():
+    """Codex, spider-bot#3, 2026-09-04: with no intake service the complaint
+    form threw the title and details away, posted a mod-log note whose
+    reference was `?`, and told the member Menno would see it. A complaint is
+    the one report that may name a person and describe what they did."""
+    from conftest import FakeAI, FakeBot, FakeChannel, make_cfg
+
+    from spiderbot.ui.forms import ComplaintModal
+
+    bot = FakeBot(make_cfg(), FakeAI())
+    bot.channels["mod-log"] = FakeChannel(id=300, name="mod-log")
+    bot.intake = None  # the documented degraded state: no #intake-state channel
+    modal = ComplaintModal(bot)
+    modal.summary._value = "about another member"
+    modal.details._value = "he said something I want Menno to see"
+
+    interaction = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    run(modal.on_submit(interaction))
+
+    said = " ".join(
+        (e.title or "") + (e.description or "") for e in interaction.embeds
+    )
+    assert "could not save" in said.lower()
+    assert "will not see it" in said.lower()
+    # And the content is NOT in the mod-log notice.
+    posted = " ".join(
+        (kw["embed"].title or "") + (kw["embed"].description or "")
+        for _a, kw in bot.channels["mod-log"].sent
+        if kw.get("embed")
+    )
+    assert "he said something" not in posted

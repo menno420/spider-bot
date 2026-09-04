@@ -595,3 +595,28 @@ def test_an_empty_support_feed_url_turns_the_feed_off():
     finally:
         os.environ.clear()
         os.environ.update(before)
+
+
+def test_a_row_carrying_only_an_id_is_not_a_run_record():
+    """Codex, spider-bot#3, 2026-09-04: a record was accepted on a non-empty
+    `record_id` alone, so `{"record_id": "x"}` inside a correctly wrapped
+    export produced `ok=True` and a summary reading "0 m on unknown in 0s —
+    unknown" — every absent measurement rendered as a MEASURED zero, published
+    under a line saying it was validated against the game's committed schema."""
+    result = evidence.parse(export([{"record_id": "x"}]))
+    assert result.record_count == 0
+    assert result.skipped_records == 1
+    assert result.latest is None
+
+    # And each required field individually, so the check is about the SET and
+    # not about one lucky key.
+    for field in evidence.REQUIRED_RECORD_FIELDS:
+        partial = {k: v for k, v in GOOD_RECORD.items() if k != field}
+        assert evidence.parse(export([partial])).record_count == 0, field
+
+    # Positive control: a complete record is still read, and an OPTIONAL field
+    # missing does not disqualify it — an export from an older build stays
+    # readable, which is what `unrecognised` and the clamp banner are for.
+    assert evidence.parse(export()).record_count == 1
+    optional = {k: v for k, v in GOOD_RECORD.items() if k != "flies_collected"}
+    assert evidence.parse(export([optional])).record_count == 1
