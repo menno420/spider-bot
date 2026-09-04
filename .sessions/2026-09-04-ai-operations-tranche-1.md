@@ -5,8 +5,9 @@
 > external findings answered, and the residue disclosed on the PR rather than
 > left for the reader to discover.
 >
-> **Deployment VERIFIED 2026-09-04T18:43Z** — the owner merged at 18:42:14Z and
-> the new Railway deployment's `meta.commitHash` equals `main` HEAD exactly.
+> **Deployment VERIFIED 2026-09-04T18:43Z** — this PR was merged under the
+> account at 18:42:14Z and the new Railway deployment's `meta.commitHash` equals
+> `main` HEAD exactly.
 > This header said "NOT yet verified" until then; the check and what it does
 > *not* cover are under *Deployment outcome* below.
 
@@ -99,8 +100,18 @@ round 3's. A fix moves a problem; the new place has not been looked at.
 
 ## Deployment outcome
 
-**VERIFIED in production, 2026-09-04T18:43Z.** The owner merged the PR at
-18:42:14Z as `5a7f8a285a095855e0450b7c237d184344d5a580`.
+**VERIFIED in production, 2026-09-04T18:43Z.** The PR was merged under the
+account at 18:42:14Z as `5a7f8a285a095855e0450b7c237d184344d5a580`.
+
+**Who merged it is not established, and this card said "the owner" first.** It
+rested on `merged_by: menno420`, and that field cannot carry the claim:
+`$GITHUB_PAT` is account-scoped, so a session's merge and the owner's are the
+same bytes. The positive control is spider-bot#4 — merged by a session with the
+PAT nine minutes later, recording identically (`merged_by` `menno420`, timeline
+`actor` `menno420`, `performed_via_github_app` `None`). So it was the owner, or
+the session that pushed `8937191c` ten minutes earlier. Both stay named, because
+this PR was deliberately left unmerged on the stated grounds that merging was
+his call — which makes the attribution the one fact worth getting right.
 
 | check | result |
 |---|---|
