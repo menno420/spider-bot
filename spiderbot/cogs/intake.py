@@ -303,6 +303,16 @@ class IntakeCog(commands.Cog):
         now = time.time()
         if now - self._last_offer.get(message.author.id, 0.0) < OFFER_COOLDOWN_S:
             return
+        # Armed HERE, before the durable write and before the reply — not after
+        # a successful delivery. `MEASURED` 2026-09-04: arming it last meant a
+        # channel where the bot cannot post (no Send Messages, no Embed Links —
+        # an ordinary configuration) never armed it at all, so every single
+        # message from one member wrote another draft into the shared store
+        # channel. 2000 messages produced 2000 store writes and zero offers,
+        # and the store is read to a fixed horizon on a cold start, so those
+        # writes push real reports out of every panel. The cooldown protects
+        # the store, so it must not depend on the part that can fail.
+        self._last_offer[message.author.id] = now
 
         title, description = summarise(content)
         draft_id = ids.report_id()
@@ -335,7 +345,6 @@ class IntakeCog(commands.Cog):
         except discord.HTTPException:
             log.debug("intake offer could not be delivered in #%s", channel_name)
             return
-        self._last_offer[message.author.id] = now
         audit.stdout_event(
             "intake_offered",
             user=str(message.author),

@@ -935,3 +935,44 @@ def test_an_unexpected_two_hundred_body_does_not_raise_out_of_the_client(text):
     PublishFailure". `json.loads(text).get(...)` raises AttributeError on a
     JSON array, which an interposing proxy or CDN error page can return."""
     assert run(_client_with(200, text).find_issue_by_marker("m")) is None
+
+
+# -- the amplifier a member can drive ----------------------------------------
+
+
+def test_a_channel_the_bot_cannot_post_in_does_not_become_a_write_amplifier():
+    """`MEASURED` 2026-09-04: the offer cooldown was armed AFTER a successful
+    reply, so a channel where the bot cannot post never armed it — and every
+    message from one member wrote another draft into the shared store channel.
+    2000 messages, 2000 writes, zero offers; and the store is read to a fixed
+    horizon on a cold start, so those writes push real reports out of every
+    panel. The cooldown protects the store, so it cannot depend on the delivery
+    that can fail."""
+    import discord
+    from conftest import FakeAI, FakeBot, FakeChannel, FakeMessage, make_cfg
+
+    bot = FakeBot(make_cfg(initiative_channels=("general",)), FakeAI())
+    bot.intake = a_service()
+    cog = intake_cog.IntakeCog(bot)
+    channel = FakeChannel(name="general")
+    author = FakeUser(42, "tester")
+
+    text = "the game froze when I released the silk near 3 km and it crashed"
+    assert intake_cog.detect(text) is not None, "the message must trip the detector"
+
+    async def refuse(*_a, **_kw):
+        raise discord.HTTPException(_FakeResponseObj(), "no permission")
+
+    for n in range(50):
+        message = FakeMessage(text, author, channel, guild=object())
+        message.id = 1000 + n
+        message.reply = refuse
+        run(cog.on_message(message))
+
+    drafts = run(bot.intake._store.load(intake_cog.DRAFTS))
+    assert len(drafts) == 1, f"one draft per cooldown window, got {len(drafts)}"
+
+
+class _FakeResponseObj:
+    status = 403
+    reason = "Forbidden"

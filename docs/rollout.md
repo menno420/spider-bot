@@ -145,6 +145,17 @@ Six things, each one exact and none of which a session can do:
 - **Should tester ideas reach `spider-swing`'s tracker at all?** It holds one
   real issue today against 179 pull requests. A stream of bot-filed ideas
   changes the character of that tracker, and that is a product judgement.
+- **Does `#intake-state` need splitting?** Reports, cases and conversational
+  DRAFTS share one channel and one 2000-message cold-read window. Nothing older
+  than that window is loaded on a restart, and an unloaded report is
+  indistinguishable from a deleted one. Two things now stand between that and a
+  lost report — a per-member filing limit in `IntakeService` and a per-member
+  offer cooldown armed before the write rather than after the reply — and the
+  store logs an ERROR the moment a cold read hits the horizon. **That log line
+  is the signal to act**: give drafts their own channel, or move the store to a
+  real database. Neither is needed at a handful of reports a week; both are
+  needed before the window fills, and the bot cannot make that call itself.
+
 - **Who counts as staff?** The moderation gate and the precheck now read one
   shared set — `gate.STAFF_PERMISSIONS`: administrator, manage_guild,
   moderate_members, ban_members, kick_members, manage_messages, manage_roles —
