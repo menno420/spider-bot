@@ -319,3 +319,89 @@ def test_a_scrubbed_transcript_reaches_the_model_clean():
     run(cog, msg(KEYWORDED, channel=ch))
     [(payload, _mode)] = ai.calls
     assert f"<@{alice.id}>" not in payload
+
+
+# -- what an adversarial review executed against the committed code -----------
+
+
+def test_a_channel_object_with_no_name_does_not_break_the_listener():
+    """`CLAUDE.md` invariant 2 is "no listener may raise", and any member can
+    archive a thread they created — after which discord.py hands the listener a
+    `PartialMessageable`, which has no `.name`. `MEASURED` 2026-09-04: this
+    listener raised `AttributeError` there, so the AI chat cog died in that
+    channel before it could answer."""
+    from types import SimpleNamespace
+
+    cog, bot, ai = build()
+    partial = SimpleNamespace(id=20, send=None)  # no .name, no .typing
+    message = FakeMessage(
+        f"<@{bot.user.id}> how do i install the build?",
+        FakeUser(1, name="Menno"),
+        partial,
+        mentions=(bot.user,),
+    )
+    replies = []
+
+    async def reply(*_a, **kw):
+        replies.append(kw)
+
+    message.reply = reply
+    run(cog, message)  # must not raise
+    assert len(ai.calls) == 1, "and it still answers"
+
+
+def test_the_mention_path_is_rate_limited():
+    """The path every member knows had no brake of any kind: one message, one
+    Anthropic call, unbounded — while the initiative path beside it was
+    carefully gated."""
+    cog, bot, ai = build()
+    author = FakeUser(7, name="flooder")
+    for _ in range(50):
+        run(cog, msg(f"<@{bot.user.id}> hello", mentions=(bot.user,), author=author))
+    assert len(ai.calls) == 1
+
+    # Positive control: a different member is not blocked by the first one's
+    # cooldown — the brake is per-member, not a tap anyone can close.
+    run(cog, msg(f"<@{bot.user.id}> hello", mentions=(bot.user,), author=FakeUser(8, "other")))
+    assert len(ai.calls) == 2
+
+
+def test_the_hourly_cap_counts_calls_not_deliveries(audit_events):
+    """`MEASURED` 2026-09-04: the cap was armed in `_deliver`, after a
+    successful reply — so a member who posted and immediately deleted their own
+    message made every reply fail with "Unknown message" and the counter never
+    moved: 500 Anthropic calls against a configured cap of 10."""
+    cog, bot, ai = build(cfg=make_cfg(initiative_hourly_cap=3, initiative_cooldown_s=0))
+    ch = FakeChannel()
+
+    async def always_fails(*_a, **_kw):
+        raise discord.HTTPException(_response(), "Unknown message")
+
+    for _ in range(50):
+        message = msg(KEYWORDED, channel=ch)
+        message.reply = always_fails
+        run(cog, message)
+    assert len(ai.calls) == 3, "the cap bounds MODEL CALLS, not deliveries"
+
+    # Positive control for the split: the COOLDOWN is still armed on delivery,
+    # which is the donor's rule and the reason initiative mode is usable at all
+    # — it answers PASS most of the time, and consuming the cooldown on every
+    # decline would mean the bot almost never speaks.
+    assert cog._last_initiative == {}
+
+
+def _response():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(status=400, reason="Bad Request")
+
+
+def test_the_transcript_memory_is_bounded():
+    """`_memory` is keyed by channel id and was never evicted, and any member
+    with Create Public Threads mints new ids at will."""
+    from spiderbot.cogs.chat import MAX_REMEMBERED_CHANNELS
+
+    cog, bot, ai = build()
+    for channel_id in range(MAX_REMEMBERED_CHANNELS + 50):
+        run(cog, msg("just chatting", channel=FakeChannel(id=channel_id, name="general")))
+    assert len(cog._memory) == MAX_REMEMBERED_CHANNELS

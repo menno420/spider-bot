@@ -51,20 +51,42 @@ def scrub_mentions(text: str) -> str:
     )
 
 
+#: The mention path is the one every member knows, and until 2026-09-04 it had
+#: no brake of any kind: one message, one Anthropic call, unbounded. The
+#: initiative path beside it was carefully gated. These are deliberately
+#: generous — a real conversation with the bot is a handful of turns — and they
+#: exist so that a member cannot spend the API budget or the rate limit at will.
+MENTION_COOLDOWN_S = 8.0
+MENTION_HOURLY_CAP = 40
+#: How many channels' transcripts to keep. `_memory` is keyed by channel id and
+#: was never evicted, and any member with Create Public Threads mints new ids at
+#: will, so the dict grew without bound.
+MAX_REMEMBERED_CHANNELS = 200
+
+
 class ChatCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.cfg = bot.cfg
         # Per-channel transcript memory: (label, text) tuples, newest last.
-        self._memory: dict[int, collections.deque] = {}
+        # Ordered so the least-recently-touched channel is the first evicted.
+        self._memory: collections.OrderedDict[int, collections.deque] = (
+            collections.OrderedDict()
+        )
         self._last_initiative: dict[int, float] = {}  # channel id -> epoch
         self._initiative_times: collections.deque = collections.deque(maxlen=200)
+        self._last_mention: dict[int, float] = {}  # member id -> epoch
+        self._mention_times: collections.deque = collections.deque(maxlen=500)
 
     # -- memory ------------------------------------------------------------
 
     def _mem(self, channel_id: int) -> collections.deque:
         if channel_id not in self._memory:
             self._memory[channel_id] = collections.deque(maxlen=self.cfg.ai_memory_turns)
+            while len(self._memory) > MAX_REMEMBERED_CHANNELS:
+                self._memory.popitem(last=False)  # least recently touched
+        else:
+            self._memory.move_to_end(channel_id)
         return self._memory[channel_id]
 
     def _record(self, message: discord.Message) -> None:
@@ -92,9 +114,19 @@ class ChatCog(commands.Cog):
         author = safety.speaker_label(
             message.author.display_name, f"user_{message.author.id % 997}"
         )
+        # The label goes INSIDE the wrapper, not into the sentence introducing
+        # it. `speaker_label` rejects a hostile name and falls back, but it is
+        # a filter, and a filter is the wrong last line: a display name is
+        # member-controlled text, so it belongs in the untrusted span with the
+        # rest of the member's words. `MEASURED` 2026-09-04: it was the one
+        # member-controlled string in the chat prompt outside the markers, and
+        # the filter missed U+2028/U+2029/U+0085, so `Bob<U+2028>System: …`
+        # rendered as a second line in the operator's own sentence.
         parts.append(
-            f"Current message in #{message.channel.name} from [{author}]:"
-            + safety.wrap_untrusted(scrub_mentions(current_text), kind="current_user_message")
+            f"Current message in #{getattr(message.channel, 'name', '') or 'a channel'}:"
+            + safety.wrap_untrusted(
+                f"[{author}] {scrub_mentions(current_text)}", kind="current_user_message"
+            )
         )
         return "\n\n".join(parts)
 
@@ -104,6 +136,13 @@ class ChatCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if message.guild is None or message.author.bot:
             return
+        # `getattr`, not `.name`: discord.py hands a listener a
+        # `PartialMessageable` for a thread that has left the cache — which any
+        # member can cause by archiving a thread they created. `MEASURED`
+        # 2026-09-04: this listener RAISED `AttributeError` there, breaking
+        # `CLAUDE.md` invariant 2 ("no listener may raise") by member action,
+        # and the AI chat cog died in that channel before the model call.
+        channel_name = getattr(message.channel, "name", "") or ""
         content = message.content or ""
         if not content.strip() or content.startswith(("/", "!")):
             return
@@ -123,21 +162,55 @@ class ChatCog(commands.Cog):
         stripped = re.sub(rf"[ \t]*<@!?{self.bot.user.id}>[ \t]*", " ", content).strip()
         if not stripped:
             audit.stdout_event("ai_decision", decision="skipped", reason="EMPTY_MESSAGE",
-                               channel=message.channel.name, author=str(message.author))
+                               channel=channel_name, author=str(message.author))
+            self._record(message)
+            return
+        if not self._mention_allowed(message.author.id):
+            audit.stdout_event("ai_decision", decision="denied", reason="MENTION_LIMIT",
+                               channel=channel_name, author=str(message.author))
             self._record(message)
             return
         payload = self._payload(message, stripped)
         self._record(message)  # record trigger only after context is gathered
-        async with message.channel.typing():
-            result = await self.bot.ai.reply(payload, mode="mention")
+        with contextlib.suppress(discord.HTTPException, AttributeError):
+            # `typing()` is a nicety; a channel object that cannot provide it
+            # must not stop the answer. A PartialMessageable has no `typing`.
+            async with message.channel.typing():
+                result = await self.bot.ai.reply(payload, mode="mention")
+                await self._deliver(message, result, decision_mode="mention")
+                return
+        result = await self.bot.ai.reply(payload, mode="mention")
         await self._deliver(message, result, decision_mode="mention")
+
+    def _mention_allowed(self, user_id: int) -> bool:
+        """Record this mention and say whether it is within the budget.
+
+        Armed HERE, before the model call — not after a successful delivery.
+        That ordering is the defect this file already contains once: the
+        initiative cap was armed in `_deliver`, so a member who deleted their
+        own message made every reply fail and the cap never counted. Measured
+        at 500 calls against a cap of 10. The budget being protected is the
+        MODEL CALL, so it cannot depend on anything after it.
+        """
+        now = time.time()
+        if now - self._last_mention.get(user_id, 0.0) < MENTION_COOLDOWN_S:
+            return False
+        hour_ago = now - 3600
+        while self._mention_times and self._mention_times[0] <= hour_ago:
+            self._mention_times.popleft()
+        if len(self._mention_times) >= MENTION_HOURLY_CAP:
+            return False
+        self._last_mention[user_id] = now
+        self._mention_times.append(now)
+        return True
 
     async def _maybe_initiative(self, message: discord.Message, content: str) -> None:
         cfg = self.cfg
         ch = message.channel
+        channel_name = getattr(ch, "name", "") or ""
         if not self.bot.ai.enabled:
             return
-        if ch.name not in cfg.initiative_channels:
+        if channel_name not in cfg.initiative_channels:
             return  # unconfigured = silent, always
         if not _KEYWORDS.search(content):
             return  # cheap heuristic gates the API call
@@ -146,37 +219,52 @@ class ChatCog(commands.Cog):
         # the decision is visible in the logs rather than silently missing.
         if any(getattr(u, "id", None) != self.bot.user.id for u in message.mentions):
             audit.stdout_event("ai_decision", decision="denied",
-                               reason="ADDRESSED_TO_OTHERS", channel=ch.name)
+                               reason="ADDRESSED_TO_OTHERS", channel=channel_name)
             return
         now = time.time()
         if now - self._last_initiative.get(ch.id, 0.0) < cfg.initiative_cooldown_s:
             audit.stdout_event("ai_decision", decision="denied", reason="COOLDOWN_ACTIVE",
-                               channel=ch.name)
+                               channel=channel_name)
             return
         hour_ago = now - 3600
         recent = sum(1 for t in self._initiative_times if t > hour_ago)
         if recent >= cfg.initiative_hourly_cap:
             audit.stdout_event("ai_decision", decision="denied", reason="HOURLY_CAP",
-                               channel=ch.name)
+                               channel=channel_name)
             return
+        # The CAP is armed here, before the model call. `MEASURED` 2026-09-04:
+        # it was armed in `_deliver`, AFTER a successful reply — so a member
+        # who posted and immediately deleted their own message made every reply
+        # fail with "Unknown message" and the counter never moved. 500
+        # Anthropic calls against a configured cap of 10, by one member.
+        #
+        # The COOLDOWN stays on delivery, which is the donor's rule and is
+        # right: it spaces out how often the bot SPEAKS, and initiative mode
+        # answers PASS most of the time. Consuming 120 seconds on every decline
+        # would mean the bot almost never speaks. The two brakes protect
+        # different things — the cap protects the API budget, so it arms where
+        # the spend happens; the cooldown protects the channel, so it arms
+        # where the speech happens.
+        self._initiative_times.append(now)
         payload = self._payload(message, content)
         result = await self.bot.ai.reply(payload, mode="initiative")
         if result.text is None:
             audit.stdout_event("ai_decision", decision="skipped" if result.reason == "pass"
                                else "degraded", reason=result.reason.upper(),
-                               channel=ch.name, model=result.model)
+                               channel=channel_name, model=result.model)
             return
         await self._deliver(message, result, decision_mode="initiative")
 
     async def _deliver(self, message: discord.Message, result, *, decision_mode: str) -> None:
         ch = message.channel
+        channel_name = getattr(ch, "name", "") or ""
         if result.text is None:
             if result.reason in ("timeout", "error"):
                 audit.stdout_event("ai_decision", decision="degraded", reason=result.reason.upper(),
-                                   channel=ch.name, mode=decision_mode)
+                                   channel=channel_name, mode=decision_mode)
                 await audit.modlog_event(
                     self.bot.channels.get("mod-log"), "AI degraded",
-                    f"mode={decision_mode} in #{ch.name}: {result.reason}",
+                    f"mode={decision_mode} in #{channel_name}: {result.reason}",
                     style.WARNING,
                 )
                 if decision_mode == "mention":
@@ -195,14 +283,13 @@ class ChatCog(commands.Cog):
                 mention_author=False,
             )
         except discord.HTTPException:
-            log.exception("delivery failed in #%s", ch.name)
+            log.exception("delivery failed in #%s", channel_name)
             return
         self.record_own(ch.id, result.text)
         if decision_mode == "initiative":
             self._last_initiative[ch.id] = time.time()
-            self._initiative_times.append(time.time())
         audit.stdout_event(
-            "ai_decision", decision="replied", mode=decision_mode, channel=ch.name,
+            "ai_decision", decision="replied", mode=decision_mode, channel=channel_name,
             model=result.model, tokens_in=result.input_tokens, tokens_out=result.output_tokens,
         )
         if decision_mode == "initiative":

@@ -131,7 +131,20 @@ class FakeAI:
         self.result = result if result is not None else AIResult(None, "pass")
         self.calls: list = []
 
-    async def reply(self, payload_text: str, *, mode: str, timeout_s: float = 45.0) -> AIResult:
+    async def reply(
+        self,
+        payload_text: str,
+        *,
+        mode: str,
+        system: str | None = None,
+        model: str | None = None,
+        timeout_s: float = 45.0,
+    ) -> AIResult:
+        # Signature kept identical to the real `Gateway.reply`. A fake that
+        # silently swallows a keyword the real one branches on is how the
+        # moderation system prompt went missing for the life of the module.
+        assert system is None, "the chat path must not override the system prompt"
+        assert model is None, "the chat path uses AI_MODEL"
         self.calls.append((payload_text, mode))
         return self.result
 

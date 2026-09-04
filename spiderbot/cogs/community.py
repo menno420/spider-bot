@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import time
 
 import discord
 from discord import app_commands
@@ -24,10 +25,18 @@ log = logging.getLogger("spiderbot.community")
 _OPTED_IN = re.compile(r"\bopt(?:ed)?[ -]?in\b", re.IGNORECASE)
 
 
+#: One "opted in" claim per member per window reaches the mod log. #mod-log is
+#: where moderation cases, AI-degraded notices and private-complaint
+#: notifications surface; without a brake one member could push unlimited
+#: "Possible new tester" embeds into it and bury the alerts staff act on.
+CLAIM_COOLDOWN_S = 900
+
+
 class CommunityCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
         self.cfg = bot.cfg
+        self._last_claim: dict[int, float] = {}  # member id -> epoch
 
     @app_commands.command(name="jointest", description="How to join the Slingy Spider closed test")
     async def jointest(self, interaction: discord.Interaction) -> None:
@@ -68,10 +77,13 @@ class CommunityCog(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Opted-in watcher: react + surface to mod-log. Never auto-grants."""
+        # `getattr`, not `.name`: discord.py hands a listener a
+        # `PartialMessageable` for a thread that has left the cache, and a
+        # listener that raises breaks `CLAUDE.md` invariant 2 by member action.
         if (
             message.guild is None
             or message.author.bot
-            or message.channel.name != self.cfg.ch_general
+            or (getattr(message.channel, "name", "") or "") != self.cfg.ch_general
             or not _OPTED_IN.search(message.content or "")
         ):
             return
@@ -79,6 +91,13 @@ class CommunityCog(commands.Cog):
         has_role = any(r.name == self.cfg.tester_role_name for r in getattr(member, "roles", []))
         if has_role:
             return
+        now = time.time()
+        if now - self._last_claim.get(member.id, 0.0) < CLAIM_COOLDOWN_S:
+            return
+        # Armed before the reaction and the post, for the reason this codebase
+        # has now measured twice: a brake that arms after the thing it protects
+        # is not a brake when that thing can be made to fail.
+        self._last_claim[member.id] = now
         with contextlib.suppress(discord.HTTPException):
             await message.add_reaction("\N{SPIDER}")
         await audit.modlog_event(

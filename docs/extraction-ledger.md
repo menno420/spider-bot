@@ -22,3 +22,26 @@ are never modified.
 Explicitly NOT carried (per plan + [D-0032]): game/economy cogs, multi-guild
 config, parity/golden apparatus, ticket system, prefix commands, Postgres
 (deferred to Phase 0 proper - v1 audits to stdout + #mod-log instead).
+
+## AI-operations tranche, 2026-09-04
+
+Rows 13 onward. The notable thing about this batch is how **few** rows it has:
+the moderation, intake, storage and evidence subsystems are new work rather than
+ports. The donors were consulted through the survey in
+[`superbot-reuse-map.md`](superbot-reuse-map.md) — which is what that survey is
+for — and the reuse that survived is the small, proven, structural kind.
+
+| # | Source | What | Decision | Where it landed |
+|---|--------|------|----------|-----------------|
+| 13 | superbot-next `sb/kernel/ai/safety.py` (already row 1) | The kinded untrusted-data wrapper, applied to a SECOND consumer: the moderation classifier reads text written by the person it is judging, which is the sharpest injection surface in the bot | reuse as-is, no change | `spiderbot/moderation/classifier.py` (`build_payload`) |
+| 14 | `spiderbot/memory.py` (this repo, 2026-08-25) | Discord-as-database: JSON records as messages in a private staff channel, human-readable without tooling, behind a narrow seam | **generalise** — collections, keyed lookup, an index built once per deploy instead of a scan per read, and multi-message records because a bug report exceeds Discord's 2000-character cap and `memory.py`'s clamp silently truncated one | `spiderbot/store.py` |
+| 15 | `spiderbot/cogs/chat.py` cooldown/cap ladder (this repo) | The shape of a rate ladder: allow-list, then keyword, then cooldown, then hourly cap, each denial audited by name | copy the shape | `spiderbot/moderation/prechecks.py`, `spiderbot/cogs/intake.py` (offer cooldown) |
+| 16 | superbot `moderation_cog` — surveyed, **not ported** | warn / timeout / kick / ban / unban as prefix commands over a service layer | **rebuild** rather than port: the donor's seven prefix commands do not survive this repo's button doctrine, and its service layer assumes a Postgres warnings table. What was taken is the *operation set* and the hierarchy preflight (row 11); everything else is new | `spiderbot/moderation/operations.py`, `gate.py` |
+| 17 | superbot `automod_cog` — surveyed, **deliberately not built** | A message-filter engine | **skip, and say why in code**: Discord's own AutoMod does this at the gateway, and discord.py 2.7.1 exposes the whole API. The useful thing is to recommend rules the owner enables | `spiderbot/moderation/prechecks.py` (`AUTOMOD_RECOMMENDATIONS`) |
+| 18 | spider-swing `game/domain/run_record.gd` + `run_record_ledger.gd` @ `fc64a3fb` | The run-evidence export contract: wrapper keys, 43 record fields, the ledger aggregates, `PIXELS_PER_METRE = 10.0` | **consume, never copy** — the schema is read from that repo's source and pinned here; spider-swing stays canonical | `spiderbot/evidence.py` |
+| 19 | spider-swing `CONSTITUTION.md` § cross-repo feeds | The pinned-feed contract: producer stamps and enforces in CI, consumer pins and fails honestly | implement both halves | `spiderbot/support.py` (consumer) + spider-swing `tools/generate_support_feed.py` (producer) |
+| 20 | spider-swing `tools/generate_audio_samples.py --check` idiom | Generator with a `--check` mode wired into `tools/verify.py`'s engine-independent section | copy the idiom exactly, so the second instance reads like the first | spider-swing `tools/generate_support_feed.py` |
+
+**Not carried, and now with a reason each:** the donor's warnings table
+(Postgres, which this bot still does not need), its ticket system, its XP and
+threshold progression, its multi-guild config, and its parity/golden apparatus.

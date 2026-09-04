@@ -1,0 +1,180 @@
+"""Neutralising text that a member wrote before it reaches somewhere it can act.
+
+Three destinations, three different things that are dangerous, one module so
+the rules live together and can be tested together.
+
+**Discord.** `AllowedMentions.none()` already stops a ping from resolving, and
+the bot uses it on every send. But it does not stop the *text* `@everyone` from
+appearing in an embed and reading as though the bot pinged the server, and it
+does not stop markdown from restructuring a panel — a member whose bug title is
+`# FREE NITRO` gets a heading in the mod's console. So mentions are defanged
+visually and markdown is escaped wherever member text is rendered inside the
+bot's own chrome.
+
+**GitHub.** This is the one with teeth. A GitHub issue body renders `@name` as a
+real mention that notifies a real person, and `#123` as a cross-reference that
+posts a backlink onto someone else's issue. A member typing `@menno420 #1` into
+a bug report would, without this, cause Spider Bot to notify the owner's GitHub
+account and graffiti an unrelated issue — from a public Discord anyone can join.
+`for_github` breaks both by inserting a zero-width space after the sigil: the
+text still reads correctly to a human and no longer resolves.
+
+**Log lines and audit records.** Newlines are what let one field forge another,
+so anything going into a single-line context gets them folded.
+
+**The zero-width space is not a stylistic choice — backslash-escaping does not
+work.** `MEASURED` 2026-09-04 against GitHub's own stateless renderer
+(`POST /markdown`, `mode=gfm`, `context=menno420/spider-swing`, which creates
+nothing and notifies nobody), ten cases with four positive controls:
+
+| input | user-mention | issue-link | code block |
+|---|---|---|---|
+| `@menno420` (control) | **live** | - | - |
+| `#2` (control) | - | **live** | - |
+| `menno420/fleet-manager#1` (control) | - | **live** | - |
+| a bare fence (control) | - | - | **opens one** |
+| a backslash before the at-sign | **still live** | - | - |
+| a backslash before the hash | - | **still live** | - |
+| `for_github("@menno420")` | inert | - | - |
+| `for_github("#2")` | - | inert | - |
+| `for_github("menno420/fleet-manager#1")` | - | inert | - |
+| `for_github(fence)` | - | - | inert |
+
+So the obvious mitigation is the one that silently fails, and this module's
+would have been untested had the controls not been run first.
+
+Nothing here is a security boundary against a *determined* attacker rendering
+their own markdown — it is a boundary against member text acquiring authority it
+was never given. The privacy decision about whether text may be published at all
+is `intake/privacy.py`'s job, not this file's; this file assumes the decision to
+publish was already made correctly.
+"""
+
+from __future__ import annotations
+
+import re
+
+# U+200B. Invisible in every client tested, and it is what stops GitHub's and
+# Discord's parsers from seeing a sigil followed by a name.
+ZERO_WIDTH = "​"
+
+_DISCORD_MARKDOWN = re.compile(r"([*_~`|\\>#\-])")
+_MENTION_SIGIL = re.compile(r"([@])")
+_GITHUB_SIGIL = re.compile(r"([@#])")
+_FENCE_RUN = re.compile(r"`{3,}")
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_NEWLINES = re.compile(r"[\r\n]+")
+# Invisible characters a member could use to hide text inside a field, or to
+# make two different reports look identical. Zero-width joiner and friends;
+# the one we insert ourselves is added back after stripping.
+_INVISIBLES = re.compile(r"[​-‏‪-‮⁠-⁯﻿]")
+#: An id minted by `spiderbot.ids` - `SB-<kind>-<time>-<random>` in the
+#: I/L/O/U-free base32 alphabet. Broken in member text on the way to GitHub,
+#: because the intake marker (``Intake id `SB-R-...` ``) is the ONLY backstop
+#: against republication and it is a plain string in a field a member types.
+#: `MEASURED` 2026-09-04: a member handed report A's id in their receipt wrote
+#: it into report B's description; B was published first, and A was then
+#: recorded as "published" at B's issue number without an issue ever being
+#: created for it. A's text never reached the tracker and both panels said it
+#: had. The break is a zero-width space, so a reader still sees the id.
+_MINTED_ID = re.compile(r"\bSB-([A-Z]{1,2})-([0-9A-Z]{4,12})-([0-9A-Z]{4,10})\b")
+#: The end of a markdown link's anchor text, immediately followed by its
+#: target: `](` for an inline link, `][` for a reference link. Broken in BOTH
+#: renderers, because a masked link is the one construct where the text a
+#: reader sees and the place it goes are decided separately — and this server
+#: hands out real install links, which makes "official tester link" pointing
+#: somewhere else the single most damaging thing member text can render as.
+#: `MEASURED` 2026-09-04: neither escaper touched brackets or parentheses, so
+#: `[official tester link](https://evil.example/apk)` typed into a bug-report
+#: modal came out of `for_github` AND `for_discord` byte-identical and rendered
+#: as a live link in a public issue and inside the bot's own embed.
+#: A BARE url is deliberately left alone: it shows a reader where it goes.
+_MASKED_LINK = re.compile(r"\](\s*[\(\[])")
+#: GitHub renders a permitted subset of raw HTML, and `<a href>` is in it —
+#: so an anchor tag is a masked link that the markdown break above does not
+#: see. Codex, spider-bot#3, 2026-09-04: `<a href="https://evil.example/apk">
+#: official tester link</a>` passed `for_github` byte-identical. The whole
+#: tag family is broken rather than just anchors: `<img>` fetches, `<video>`
+#: and `<details>` hide text from the reader, and none of them is something
+#: a member typing a bug report needs.
+_HTML_TAG = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9]*)(?=[\s/>])")
+
+
+def clean(text: str, *, limit: int | None = None) -> str:
+    """Strip control characters and invisibles, collapse runs, optionally clip.
+
+    The base pass. Everything else in this module runs after it, so no other
+    function has to think about a NUL byte or a right-to-left override.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    out = _INVISIBLES.sub("", _CONTROL.sub("", text)).strip()
+    if limit is not None and len(out) > limit:
+        out = out[: max(0, limit - 1)].rstrip() + "\N{HORIZONTAL ELLIPSIS}"
+    return out
+
+
+def one_line(text: str, *, limit: int = 200) -> str:
+    """For a log line, an embed title, or an issue title. Never multi-line."""
+    return clean(_NEWLINES.sub(" ", clean(text)), limit=limit)
+
+
+def for_discord(text: str, *, limit: int | None = None) -> str:
+    """Member text rendered inside the bot's own embeds.
+
+    Markdown is escaped so a title cannot become a heading and a description
+    cannot become a quote block. `@` is defanged so no rendering of member text
+    can read as the bot having pinged anyone, whatever `AllowedMentions` did.
+    And a masked link is broken: Discord renders `[text](url)` inside an embed
+    description, so without this the bot's own embed - the surface members
+    trust most - would render a member's link under a label the member chose.
+    """
+    escaped = _DISCORD_MARKDOWN.sub(r"\\\1", clean(text, limit=limit))
+    escaped = _MENTION_SIGIL.sub(rf"@{ZERO_WIDTH}", escaped)
+    return _MASKED_LINK.sub(rf"]{ZERO_WIDTH}\1", escaped)
+
+
+def for_github(text: str, *, limit: int | None = None) -> str:
+    """Member text going into a PUBLIC GitHub issue.
+
+    `@name` and `#123` are the two sigils that make GitHub act rather than
+    render: one notifies a person, the other posts a backlink onto an unrelated
+    issue. Both are broken with a zero-width space, which a reader does not see
+    and a parser does not cross.
+
+    A triple backtick is neutralised too. It is not an injection - it opens a
+    code block - but an unbalanced one swallows the whole rest of the issue
+    body, so a member could hide everything after their own text from the
+    developer reading it. Cheap to prevent, invisible when it does not apply.
+
+    And a MASKED link is broken in BOTH of its spellings: `[anchor](target)`
+    and `<a href="target">anchor</a>`, because GitHub renders a permitted
+    subset of raw HTML and an anchor tag is in it. Those are the constructs
+    where the words a reader sees and the place they go are chosen
+    independently. A bare URL is left alone on purpose - it tells the reader
+    where it goes.
+    """
+    broken = _GITHUB_SIGIL.sub(rf"\1{ZERO_WIDTH}", clean(text, limit=limit))
+    broken = _MINTED_ID.sub(rf"SB{ZERO_WIDTH}-\1-\2-\3", broken)
+    broken = _MASKED_LINK.sub(rf"]{ZERO_WIDTH}\1", broken)
+    broken = _HTML_TAG.sub(rf"<{ZERO_WIDTH}\1\2", broken)
+    return _FENCE_RUN.sub("'''", broken)
+
+
+def fenced_for_github(text: str, *, limit: int | None = None) -> str:
+    """Member text inside a fenced block, with the fence made unbreakable.
+
+    A backtick run inside member text would otherwise close the fence early and
+    let everything after it render as markdown. `for_github` already replaces
+    fence runs; this alias exists so a caller putting text inside a fence says
+    so at the call site rather than relying on that.
+    """
+    return for_github(text, limit=limit)
+
+
+def is_safe_reference(value: str) -> bool:
+    """True for a value safe to put in a URL path or an issue label.
+
+    Deliberately strict: ids this system mints, and nothing else.
+    """
+    return bool(value) and all(c.isalnum() or c in "-_." for c in value)
