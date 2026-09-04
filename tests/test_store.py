@@ -92,7 +92,9 @@ def test_chunks_of_two_generations_never_interleave():
         "```json\n{\"nope\": 1}\n```",          # right fence, wrong shape
         "```json\nnot json at all\n```",
         "```json\n[1, 2, 3]\n```",              # a list, not an envelope
-        "```json\n{\"v\": 1, \"c\": \"r\", \"k\": \"K\", \"g\": \"a\", \"i\": 0, \"n\": 1, \"d\": \"{}\"}\n```",
+        # right shape but a schema version this reader predates
+        '```json\n{"v": 1, "c": "r", "k": "K", "g": "a",'
+        ' "i": 0, "n": 1, "d": "{}"}\n```',
     ],
 )
 def test_anything_a_human_typed_in_the_channel_is_ignored(content):
