@@ -1012,3 +1012,93 @@ def test_a_member_cannot_render_a_masked_link_in_either_destination():
     plain = "it happens on https://play.google.com/apps/testing/x every time"
     assert redact.for_github(plain) == plain
     assert redact.for_discord(plain) == plain
+
+
+# -- the approver reads the text, not the reference ---------------------------
+
+
+def _publish_cog(svc):
+    from conftest import FakeAI, FakeBot, make_cfg
+
+    bot = FakeBot(make_cfg(), FakeAI())
+    bot.intake = svc
+    return intake_cog.IntakeCog(bot)
+
+
+def test_publish_shows_the_whole_issue_body_before_anything_is_posted():
+    """The gate that replaced the classifier was approving by report id.
+
+    An adversarial review's sharpest point: requiring a named human stopped a
+    CLASSIFIER publishing unseen content and replaced it with a PERSON
+    publishing unseen content — `/publish` took an id and the staff queue
+    showed a 60-character title, so every obfuscation the classifier missed
+    sailed past the human too.
+    """
+    github = FakeGitHub()
+    svc = a_service(github)
+    out = run(
+        svc.file(
+            category=Category.BUG,
+            title="Swing physics break above 3 km",
+            description="the reel snaps and the CONSPICUOUS PHRASE appears",
+            reporter=Reporter(user_id=42),
+        )
+    )
+    cog = _publish_cog(svc)
+    interaction = FakeInteraction(guild=None, user=FakeUser(1, "Menno"))
+    run(cog.publish.callback(cog, interaction, out.report.id))
+
+    assert github.created == [], "nothing is posted by asking to publish"
+    [embed] = interaction.embeds
+    assert "CONSPICUOUS PHRASE" in embed.description, "the approver must see the body"
+    assert out.report.public_title() in embed.description
+    assert "from-spider-bot" in embed.description  # and the labels
+
+    # And the confirm button is what publishes.
+    view = interaction.followup.messages[-1][1]["view"]
+    confirm = FakeInteraction(guild=None, user=FakeUser(1, "Menno"))
+    confirm.client = _Bot(svc)
+    run(view.confirm.callback(confirm))
+    assert len(github.created) == 1
+    assert run(svc.get(out.report.id)).approved_by
+
+
+def test_a_report_reclassified_between_preview_and_press_is_not_published():
+    """Authority and publishability are re-resolved at press time, not carried
+    from when the panel was drawn."""
+    github = FakeGitHub()
+    svc = a_service(github)
+    out = run(
+        svc.file(category=Category.BUG, title="t", description="d",
+                 reporter=Reporter(user_id=42))
+    )
+    view = intake_cog.PublishPreview(FakeUser(1, "Menno"), out.report.id)
+
+    private = out.report.with_(sensitivity=Sensitivity.PRIVATE)
+    run(svc._store.append(store.REPORTS, private.id, private.as_record()))
+
+    interaction = FakeInteraction(guild=None, user=FakeUser(1, "Menno"))
+    interaction.client = _Bot(svc)
+    run(view.confirm.callback(interaction))
+    assert github.created == []
+    assert "no longer publishable" in " ".join(
+        str(kw.get("content", "")) for kw in interaction.response.edits
+    )
+
+
+def test_a_fullwidth_spelling_is_scanned_as_the_word_a_reader_sees():
+    """`clean` removes the invisibles but not the fullwidth and ligature forms,
+    so a fullwidth trigger word was a different string to the scanner and the
+    same word to every reader."""
+    # Built from code points so the source stays plain ASCII: the fullwidth
+    # forms are U+FF41..U+FF5A, which NFKC folds back to a-z.
+    fullwidth = "".join(chr(ord(c) - ord("a") + 0xFF41) for c in "harassing")
+    report = a_report(description=f"he is {fullwidth} me")
+    assert fullwidth != "harassing"
+    assert "harassing" in report.published_text()
+    assert privacy.classify(report).sensitivity is Sensitivity.PRIVATE
+
+    # Positive control: an ordinary game report is still sorted as public-safe,
+    # so the fold widened what is CAUGHT rather than flagging everything.
+    ordinary = a_report(description="the reel snaps above 3 km on my Pixel")
+    assert privacy.classify(ordinary).sensitivity is Sensitivity.PUBLIC_SAFE

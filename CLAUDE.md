@@ -265,6 +265,17 @@ structural change - that plan outranks preferences you arrive with.
     failed" on a button that is working. `safe_defer` first, then
     `safe_followup` / `safe_edit`.
 
+45. **The approver reads the text, not the reference.** Invariant 23 says
+    publication needs a named human. That is not worth much on its own: an
+    adversarial review's sharpest point was that `/publish` took a report id
+    and the staff queue showed a 60-character title, so requiring a person
+    stopped a CLASSIFIER publishing unseen content and replaced it with a
+    PERSON publishing unseen content — and every obfuscation the classifier
+    missed sailed past the human too. `/publish` renders `public_title()` and
+    `public_body()` verbatim behind a confirm, and re-resolves publishability
+    at press time. A preview that paraphrases is the same failure as a
+    title-only queue.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

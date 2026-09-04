@@ -37,6 +37,7 @@ from discord.ext import commands
 
 from spiderbot import audit, ids, redact, style
 from spiderbot.intake.models import Category, Reporter
+from spiderbot.ui.base import Panel
 from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
 from spiderbot.ui.safe import safe_defer, safe_edit, safe_followup
 
@@ -285,6 +286,71 @@ def build_offer(bot, draft_id: str, category: Category, title: str, description:
     return embed, view
 
 
+class PublishPreview(Panel):
+    """The exact issue, shown to the approver before it exists.
+
+    **Why this is a panel and not a one-line command.** Publication used to be
+    a keyword classifier: "no signal found" meant "safe", the vocabulary was
+    English on a Dutch server, and a plain complaint naming a member published
+    verbatim. The fix was to require a named human — and an adversarial review
+    then pointed out what that fix had actually bought: `/publish` approved by
+    report ID and the staff queue showed a 60-character title, so it replaced a
+    classifier publishing unseen content with a PERSON publishing unseen
+    content. Every obfuscation attack survives that, because the approver was
+    never shown the thing under attack.
+
+    So the approver reads `public_title()` and `public_body()` — the real
+    strings, rendered exactly as the issue will carry them — and then presses.
+    Authority and publishability are re-resolved at press time, not trusted
+    from when the panel was built.
+    """
+
+    def __init__(self, author, report_id: str) -> None:
+        super().__init__(author, timeout=180)
+        self.report_id = report_id
+
+    @discord.ui.button(label="Publish it", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, _button) -> None:
+        if not await safe_defer(interaction, ephemeral=True):
+            return
+        service = getattr(interaction.client, "intake", None)
+        if service is None:
+            await safe_followup(interaction, "Intake is not configured.", ephemeral=True)
+            return
+        report = await service.get(self.report_id)
+        # Re-checked here, not carried from the preview: the report may have
+        # been published, resolved or reclassified since the panel was drawn.
+        if report is None or not report.is_public_safe:
+            await safe_edit(
+                interaction,
+                content=f"`{self.report_id}` is no longer publishable.",
+                embed=None,
+                view=None,
+            )
+            return
+        approved = await service.approve(report.id, by=str(interaction.user))
+        result = await service.publish(approved.id)
+        for item in self.children:
+            item.disabled = True
+        await safe_edit(
+            interaction,
+            content=result.reporter_message or f"Could not publish: {result.failure}",
+            embed=None,
+            view=None,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Keep it private", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _button) -> None:
+        await safe_edit(
+            interaction,
+            content=f"`{self.report_id}` was not published.",
+            embed=None,
+            view=None,
+        )
+        self.stop()
+
+
 class IntakeCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -390,11 +456,15 @@ class IntakeCog(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(report_id="The reference, e.g. SB-R-...")
     async def publish(self, interaction: discord.Interaction, report_id: str) -> None:
-        """The publication gate, and it is a person.
+        """The publication gate, and it is a person WHO HAS READ THE TEXT.
 
         A keyword classifier cannot be the last thing between a member's words
         and a public page — it could not read this server's own language. So
-        the classifier sorts and a human decides.
+        the classifier sorts and a human decides. **And the human is shown what
+        they are deciding about**: this command used to approve by report id
+        and publish in the same breath, which meant every obfuscation attack
+        the classifier missed sailed past the human too, because the human was
+        never shown the body either.
         """
         service = getattr(self.bot, "intake", None)
         if service is None:
@@ -416,12 +486,31 @@ class IntakeCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        approved = await service.approve(report.id, by=str(interaction.user))
-        result = await service.publish(approved.id)
-        await interaction.followup.send(
-            result.reporter_message or f"Could not publish: {result.failure}",
-            ephemeral=True,
+        if report.github_issue_number is not None:
+            await interaction.followup.send(
+                f"`{report.id}` is already on the tracker: "
+                f"{report.github_issue_url or f'#{report.github_issue_number}'}",
+                ephemeral=True,
+            )
+            return
+        # The REAL strings, not a summary of them: a preview that paraphrases
+        # is the same failure as a title-only queue.
+        body = report.public_body()
+        panel = PublishPreview(interaction.user, report.id)
+        embed = style.embed(
+            title=f"{style.WARN} Publish this, publicly, to {self.cfg.github_repo}?",
+            description=(
+                f"**Issue title**\n{report.public_title()}\n\n"
+                f"**Issue body — this is exactly what goes on the internet**\n"
+                f"{body[:3000]}"
+                + ("\n\n_(body truncated in this preview)_" if len(body) > 3000 else "")
+                + f"\n\nLabels: {', '.join(report.labels())}"
+            ),
+            color=style.WARNING,
+            icon_url=style.avatar_url(self.bot),
         )
+        sent = await interaction.followup.send(embed=embed, view=panel, ephemeral=True)
+        panel.message = sent
 
     @app_commands.command(
         name="retryreports", description="Retry reports that could not reach GitHub"

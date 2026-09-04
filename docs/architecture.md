@@ -131,6 +131,10 @@ removed. The shape of the ones that mattered, because it repeats:
   satisfies the evidence-quote containment test trivially, so the "one defence
   that does not rely on the model cooperating" was, for the single most common
   false positive, no defence at all.
+- **The gate that moved the problem.** Requiring a named human to publish was
+  the right fix for the classifier being unable to read Dutch — and for two
+  commits it approved by report id, so the human was as blind as the classifier
+  had been. A gate is only worth what the gatekeeper can see.
 - **The identifier in a member's hands.** The intake marker is the only
   backstop against republication and it is a plain string in a typed field.
 

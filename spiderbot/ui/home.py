@@ -358,15 +358,20 @@ class HomePanel(Panel):
             "",
         ]
         if waiting:
-            lines.append("**Waiting for your decision** — `/publish <id>`")
+            lines.append(
+                "**Waiting for your decision** — `/publish <id>` shows you the "
+                "exact issue text before anything is posted"
+            )
             lines += [f"· {_staff_report_line(r)}" for r in waiting[:6]]
             lines.append("")
         for report in reports[:12]:
             lines.append(_staff_report_line(report))
         lines += [
             "",
-            "*Nothing reaches the public tracker until you publish it. The "
-            "classifier sorts; it does not decide.*",
+            "*Nothing reaches the public tracker until you publish it, and "
+            "`/publish` renders the whole issue body first. The classifier "
+            "sorts this list; it decides nothing, and it cannot read every "
+            "language this server speaks.*",
         ]
         if pending:
             lines.append(

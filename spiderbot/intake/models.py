@@ -15,6 +15,7 @@ because a field added later defaults to absent rather than to leaked.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
@@ -267,15 +268,29 @@ class Report:
     def published_text(self) -> str:
         """Everything member-controlled that would reach a public issue.
 
-        **Cleaned the way it will be published.** That is the whole point and
-        it was the hole: `redact.clean` strips zero-width and control
+        **Cleaned and folded the way a READER will see it.** That is the whole
+        point and it was the hole: `redact.clean` strips zero-width and control
         characters on the way OUT, so a member writing `har<U+200B>assing` was
         scanned as one string and published as another, with the trigger word
-        restored. The classifier now reads the same text the reader will.
+        restored. NFKC is applied for the same reason one notch further out —
+        a fullwidth or ligature spelling is a different string and the same
+        word. The scanner now reads what the reader reads.
+
+        **This is a pre-sort, not a gate**, and no amount of folding makes it
+        one: publication needs a named human who has been shown the rendered
+        body (`/publish`). Every improvement here changes which bucket a report
+        lands in, never whether a person looked at it.
         """
-        parts = [redact.clean(getattr(self, name, "") or "") for name in PUBLISHED_FIELDS]
-        parts += [redact.clean(x) for x in self.ai_tags]
-        parts += [redact.clean(x) for x in self.evidence_summary]
+        def scanned(value: Any) -> str:
+            # NFKC as well as `clean`: `clean` removes the invisibles but not
+            # the fullwidth and ligature forms, so a fullwidth spelling of a
+            # trigger word reads as a different word to a scanner and as the
+            # same word to every reader.
+            return unicodedata.normalize("NFKC", redact.clean(value))
+
+        parts = [scanned(getattr(self, name, "") or "") for name in PUBLISHED_FIELDS]
+        parts += [scanned(x) for x in self.ai_tags]
+        parts += [scanned(x) for x in self.evidence_summary]
         return " ".join(p for p in parts if p)
 
     # -- rendering -----------------------------------------------------------
