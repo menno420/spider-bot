@@ -394,7 +394,13 @@ def _summarise_record(record: dict[str, Any]) -> RunSummary | None:
     record_id = _text(record.get("record_id"), limit=64)
     if not record_id:
         return None  # the producer rejects these too
-    missing = [field for field in REQUIRED_RECORD_FIELDS if field not in record]
+    # `record.get(field) is None`, not `field not in record`: an export
+    # carrying explicit nulls has every key present. Gemini (free-key review of
+    # this fix, 2026-09-04) — and confirmed by running it: a fully-nulled
+    # record passed the key check and rendered "0 m on unknown in 0s" as
+    # though the game had measured it, which is the exact defect the check was
+    # added to stop, arriving one JSON literal further along.
+    missing = [field for field in REQUIRED_RECORD_FIELDS if record.get(field) is None]
     if missing:
         # Codex, spider-bot#3, 2026-09-04: a record was accepted on a non-empty
         # `record_id` alone, so `{"record_id": "x"}` inside a correctly wrapped

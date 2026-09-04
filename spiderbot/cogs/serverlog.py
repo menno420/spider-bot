@@ -35,7 +35,7 @@ import time
 from collections import deque
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from spiderbot import audit, redact, style
 
@@ -66,6 +66,24 @@ class ServerLogCog(commands.Cog):
 
     async def _post(self, title: str, description: str, colour) -> None:
         await audit.modlog_event(self._log_channel, title, description, colour)
+
+    @tasks.loop(seconds=DELETION_LOG_WINDOW_S)
+    async def _flush_withheld(self) -> None:
+        """Say how many deletion notices were withheld, once the flood stops."""
+        if not self._deletions_withheld:
+            self._flush_withheld.stop()
+            return
+        if not self._deletion_budget():
+            return  # still flooding; the count keeps rising
+        withheld, self._deletions_withheld = self._deletions_withheld, 0
+        await self._post(
+            f"{style.WARN} Deletion notices resumed",
+            f"{withheld} deletion notice(s) were withheld while messages were "
+            "being deleted faster than this channel can usefully carry. "
+            "Discord's own audit log has every one of them.",
+            style.WARNING,
+        )
+        self._flush_withheld.stop()
 
     def _deletion_budget(self) -> bool:
         """Whether this deletion notice may be posted.
@@ -193,6 +211,12 @@ class ServerLogCog(commands.Cog):
             )
         if not self._deletion_budget():
             self._deletions_withheld += 1
+            # Reported when the flood ENDS, not only when the next notice
+            # happens to fit. Gemini (free-key review of this fix, 2026-09-04):
+            # if the deletions simply stop, the count was never flushed and
+            # staff never learned how many they had not been shown.
+            if not self._flush_withheld.is_running():
+                self._flush_withheld.start()
             if self._deletions_withheld == 1:
                 await self._post(
                     f"{style.WARN} Deletions are being logged too fast",

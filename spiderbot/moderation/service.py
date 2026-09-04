@@ -39,6 +39,11 @@ from spiderbot.moderation.policy import Policy
 #: conversation in a small playtest server; far below what it takes to matter.
 SCAN_COOLDOWN_S = 20.0
 SCAN_HOURLY_CAP = 300
+#: The same brake for edits, kept separate so an edit is not suppressed by the
+#: original message's cooldown and an ordinary message is not suppressed by an
+#: edit's. Shorter than `SCAN_COOLDOWN_S` because an honest correction follows
+#: a message closely; long enough that editing in a loop is not free.
+EDIT_COOLDOWN_S = 10.0
 
 log = logging.getLogger("spiderbot.moderation")
 
@@ -68,6 +73,7 @@ class ModerationService:
         self._now = now
         #: Per-member cooldown and a global hourly cap on classifier calls.
         self._last_scan: dict[int, float] = {}
+        self._last_edit: dict[int, float] = {}
         self._scan_times: deque[float] = deque(maxlen=SCAN_HOURLY_CAP * 2)
 
     @property
@@ -106,14 +112,28 @@ class ModerationService:
         judgement that has already been made.
         """
         now = self._now()
-        if reason != "edit" and now - self._last_scan.get(user_id, 0.0) < SCAN_COOLDOWN_S:
+        if reason == "edit":
+            # An edit skips the ordinary cooldown — the point of the exemption
+            # — but is NOT unmetered. Gemini (free-key review of the fix,
+            # 2026-09-04): with only the global cap behind it, one member
+            # editing one message a hundred times consumed the whole server's
+            # hourly budget and starved every other channel. So edits get their
+            # own, tighter per-member cooldown, and they do not stamp
+            # `_last_scan` — otherwise editing would silently extend the
+            # member's cooldown for ordinary messages.
+            if now - self._last_edit.get(user_id, 0.0) < EDIT_COOLDOWN_S:
+                return False
+        elif now - self._last_scan.get(user_id, 0.0) < SCAN_COOLDOWN_S:
             return False
         hour_ago = now - 3600
         while self._scan_times and self._scan_times[0] <= hour_ago:
             self._scan_times.popleft()
         if len(self._scan_times) >= SCAN_HOURLY_CAP:
             return False
-        self._last_scan[user_id] = now
+        if reason == "edit":
+            self._last_edit[user_id] = now
+        else:
+            self._last_scan[user_id] = now
         self._scan_times.append(now)
         return True
 

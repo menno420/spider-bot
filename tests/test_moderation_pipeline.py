@@ -1183,3 +1183,23 @@ def test_the_edit_exemption_still_honours_the_global_cap():
     after = a_message("you are worthless and everyone here knows it")
     run(cog.on_message_edit(before, after))
     assert gateway.calls == []
+
+
+def test_editing_in_a_loop_cannot_starve_the_servers_budget():
+    """Gemini (free-key review of the edit-cooldown exemption, 2026-09-04): with
+    only the global cap behind it, one member editing one message a hundred
+    times consumed the whole server's hourly budget and starved every other
+    channel. Edits get their own, tighter per-member cooldown."""
+    gateway = FakeGateway(verdict_json())
+    service = a_service(mode="shadow")
+    service._classifier = Classifier(gateway)
+    cog = _edit_cog(service)
+
+    before = a_message("harmless")
+    for _ in range(100):
+        run(cog.on_message_edit(before, a_message("you are worthless and everyone knows it")))
+    assert len(gateway.calls) == 1, "one edit per member per window, not a hundred"
+
+    # And an edit must not extend the member's cooldown for ordinary messages:
+    # the two brakes are separate because they answer different questions.
+    assert service._last_scan == {}

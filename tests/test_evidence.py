@@ -620,3 +620,21 @@ def test_a_row_carrying_only_an_id_is_not_a_run_record():
     assert evidence.parse(export()).record_count == 1
     optional = {k: v for k, v in GOOD_RECORD.items() if k != "flies_collected"}
     assert evidence.parse(export([optional])).record_count == 1
+
+
+def test_a_record_of_explicit_nulls_is_not_a_run_record_either():
+    """`field not in record` checks the KEY. Gemini (free-key review of the
+    fix that added the required-field check, 2026-09-04, confirmed by running
+    it): an export carrying explicit nulls has every key present, so it passed
+    and rendered "0 m on unknown in 0s" — the same defect one JSON literal
+    further along."""
+    nulled = {
+        "record_id": "x", "difficulty_id": None, "terminal_outcome": None,
+        "final_distance_pixels": None, "active_duration_seconds": None,
+    }
+    result = evidence.parse(export([nulled]))
+    assert result.record_count == 0 and result.skipped_records == 1
+    # Positive control: a real export is unaffected, and a record whose
+    # OPTIONAL field is null is still read.
+    assert evidence.parse(export()).record_count == 1
+    assert evidence.parse(export([{**GOOD_RECORD, "flies_collected": None}])).record_count == 1

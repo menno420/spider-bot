@@ -231,7 +231,9 @@ class ConfirmFiling(
         # restart finds it already claimed, and the id is stable, so filing
         # again would overwrite one report rather than mint two.
         report_id = already or ids.report_id()
-        claimed = await backing.append(
+        # A resume already holds the claim — re-writing an identical record
+        # costs a Discord message against the store's fixed history for nothing.
+        claimed = already == report_id or await backing.append(
             DRAFTS, self.draft_id, {**draft, "filed_report_id": report_id}
         )
         if not claimed:
