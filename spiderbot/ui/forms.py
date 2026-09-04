@@ -91,6 +91,7 @@ async def _deliver(bot, channel_key: str, title: str, body: str, author) -> str:
     deferred — got no receipt and no reference, and filed it again.
     """
     target = bot.channels.get(channel_key)
+    failed = False
     try:
         if isinstance(target, discord.ForumChannel):
             created = await target.create_thread(
@@ -102,6 +103,7 @@ async def _deliver(bot, channel_key: str, title: str, body: str, author) -> str:
             return "Thank you! Your report reached the team."
     except discord.DiscordException as exc:
         log.warning("delivery to #%s failed (%s); falling back to #mod-log", channel_key, exc)
+        failed = True
     fallback = bot.channels.get("mod-log")
     if fallback is not None:
         try:
@@ -109,12 +111,17 @@ async def _deliver(bot, channel_key: str, title: str, body: str, author) -> str:
                 f"From {getattr(author, 'display_name', author)}: **{title}**\n{body}"[:1900],
                 allowed_mentions=NO_MENTIONS,
             )
+            return "Thank you! Your report reached the team."
         except discord.DiscordException as exc:
             log.warning("fallback delivery to #mod-log failed too (%s)", exc)
-            return (
-                "Thank you! It is saved; posting it to the team's channel failed, "
-                "so they will see it in the queue."
-            )
+            failed = True
+    if failed:
+        # Gemini (free-key review of round 2, 2026-09-04): with the target
+        # failed and no #mod-log at all, this said "reached the team".
+        return (
+            "Thank you! It is saved; posting it to the team's channel failed, "
+            "so they will see it in the queue."
+        )
     return "Thank you! Your report reached the team."
 
 

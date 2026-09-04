@@ -274,3 +274,11 @@ def test_delivery_failure_after_the_report_is_stored_still_yields_a_receipt():
     bot.channels = {"bug-reports": Broken(), "mod-log": Broken()}
     receipt = asyncio.run(_deliver(bot, "bug-reports", "t", "body", "alice"))
     assert "saved" in receipt and "failed" in receipt
+    # Gemini (free-key review of round 2): target failed and NO mod-log at all
+    # used to say "reached the team".
+    bot.channels = {"bug-reports": Broken()}
+    receipt = asyncio.run(_deliver(bot, "bug-reports", "t", "body", "alice"))
+    assert "saved" in receipt and "failed" in receipt
+    # And the pre-existing happy paths are unchanged: no target, a mod-log.
+    bot.channels = {"mod-log": Sink()}
+    assert "reached the team" in asyncio.run(_deliver(bot, "bug-reports", "t", "b", "alice"))

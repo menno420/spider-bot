@@ -376,7 +376,10 @@ class HomePanel(Panel):
             ]
             if len(oldest_first) > 12:
                 # Codex, spider-bot#5 round 2: the newest six left the rest as
-                # a bare count. Oldest first, twelve, and the remainder named.
+                # a bare count. Oldest first, twelve, and the remainder COUNTED
+                # — not named; the twelve shown are the ones to act on first,
+                # and acting on them surfaces the next. Full pagination is
+                # deliberately not built at this server's volume.
                 lines.append(f"· … and {len(oldest_first) - 12} more, oldest shown first")
             lines.append("")
         if waiting:

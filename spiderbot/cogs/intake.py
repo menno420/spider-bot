@@ -70,7 +70,11 @@ DRAFTS = "intake_drafts"
 BOT_SUBJECT = re.compile(
     # `(?<![\w/])` rather than `\b`: a word boundary cannot precede a slash,
     # so `\b/tester` never matched a command name at the start of a message.
-    r"(?<![\w/])(spider ?bot|the bot|bot'?s|/(?:home|report|publish|jointest|tester)|"
+    # `[ -]?`: "spider-bot" is how people type it too. Gemini (free-key review
+    # of round 2, 2026-09-04): the hyphenated form matched neither this nor
+    # the game exclusion's lookahead, so "the spider-bot is broken" read as a
+    # game bug.
+    r"(?<![\w/])(spider[ -]?bot|the bot|bot'?s|/(?:home|report|publish|jointest|tester)|"
     r"the panel|home panel)(?!\w)",
     re.IGNORECASE,
 )
@@ -85,7 +89,7 @@ BOT_TROUBLE = re.compile(
 #: the game is broken" is about the game.
 GAME_SUBJECT = re.compile(
     r"\b(the game|the app|slingy spider|the level|the bird|the silk|the web|"
-    r"the spider(?! ?bot))\b",
+    r"the spider(?![ -]?bot))\b",
     re.IGNORECASE,
 )
 #: Where one thought ends and the next begins, for the purpose above. Codex,

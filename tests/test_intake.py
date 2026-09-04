@@ -518,6 +518,10 @@ def test_the_subject_and_the_trouble_must_share_a_clause_and_the_game_wins_it():
     assert detect("I asked the bot for help because the game doesn't work anymore") is Category.BUG
     assert detect("the bot said the game is broken and it is right about that") is Category.BUG
     assert detect("Spider Bot crashes when I use /report on my phone") is Category.BOT_PROBLEM
+    # Gemini (free-key review of round 2): the hyphenated spelling matched
+    # neither the bot subject nor the game exclusion's lookahead.
+    assert detect("the spider-bot is broken, nothing happens on /home") is Category.BOT_PROBLEM
+    assert detect("the spider fell through the floor and the game froze") is Category.BUG
     assert detect("the home panel froze after I pressed Reports twice") is Category.BOT_PROBLEM
     # A sentence naming BOTH stays a game report — the safer default, since a
     # wrongly-confirmed bot offer would route a game defect to the bot tracker.
