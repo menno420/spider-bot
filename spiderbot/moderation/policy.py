@@ -34,6 +34,7 @@ from typing import Any
 from spiderbot.moderation.contracts import (
     HUMAN_CONFIRMED_OPERATIONS,
     HUMAN_ONLY_CATEGORIES,
+    MUTATING_OPERATIONS,
     POLICY_VERSION,
     Category,
     Operation,
@@ -163,8 +164,14 @@ class Decision:
 
     @property
     def acts(self) -> bool:
-        """True when this decision would change something a member can see."""
-        return self.operation is not Operation.NOTHING
+        """True when this decision would change something a member can see.
+
+        Membership in `MUTATING_OPERATIONS`, not inequality with `NOTHING`:
+        `FLAG_FOR_REVIEW` changes nothing a member experiences, and reading it
+        as an action would make the shipping default (ceiling
+        `flag_for_review`) report itself as acting on every case.
+        """
+        return self.operation in MUTATING_OPERATIONS
 
     def as_record(self) -> dict[str, Any]:
         return {

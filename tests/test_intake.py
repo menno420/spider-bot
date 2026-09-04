@@ -404,3 +404,99 @@ def test_the_retry_pass_is_bounded():
         run(svc.file(category=Category.BUG, title=f"t{index}", description="d"))
     github.fail = None
     assert len(run(svc.retry_pending(limit=10))) == 10
+
+
+# -- defects the design pilot found by reading the committed code -------------
+
+
+def test_evidence_lines_are_escaped_where_they_reach_a_github_body():
+    """They arrive already rendered for ANOTHER destination. A summary escaped
+    for Discord leaves `#123` live as a GitHub cross-reference."""
+    body = published_body(
+        evidence_summary=("Build @menno420 saw #1 fail", "Reached 5,123 m"),
+        evidence_format="spider-swing-local-run-evidence@2",
+    )
+    assert "@menno420" not in body
+    assert "#1 " not in body
+    assert "5,123 m" in body, "the useful content must survive"
+
+
+def test_every_field_the_body_publishes_is_scanned_by_the_classifier():
+    """A member typing contact details into the DEVICE box would otherwise be
+    published: the classifier never looked at that field."""
+    for field_name, value in (
+        ("device", "Pixel 7a, reach me at bob@example.com"),
+        ("ai_summary", "The reporter says this player keeps harassing them"),
+        ("build_version", "<@123456789> build"),
+    ):
+        report = a_report(**{field_name: value})
+        assert not privacy.classify(report).public, field_name
+
+
+def test_evidence_lines_are_scanned_too():
+    report = a_report(evidence_summary=("Build @everyone contact me at a@b.com",))
+    assert not privacy.classify(report).public
+
+
+def test_a_resolved_report_can_still_be_published():
+    """Marking a report resolved before the retry queue drained would otherwise
+    make it permanently unpublishable: a GitHub outage plus a tidy moderator
+    equals a silently dropped report."""
+    github = FakeGitHub(fail=github_sink.PublishFailure("network", "down"))
+    svc = a_service(github)
+    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    run(svc.publish(out.report.id))
+    run(svc.mark_resolved(out.report.id, "fixed in 0.46"))
+    github.fail = None
+    assert [r.id for r in run(svc.pending_publication())] == [out.report.id]
+    assert run(svc.publish(out.report.id)).published
+
+
+def test_a_report_the_reporter_did_not_clear_is_not_published():
+    """An explicit form submission is consent; a conversational draft is not
+    until they press confirm."""
+    assert not a_report(
+        sensitivity=Sensitivity.PUBLIC_SAFE,
+        sensitivity_reason="checked",
+        reporter_cleared=False,
+        status=Status.STORED,
+    ).may_publish
+    assert a_report(
+        sensitivity=Sensitivity.PUBLIC_SAFE,
+        sensitivity_reason="checked",
+        reporter_cleared=True,
+        status=Status.STORED,
+    ).may_publish
+
+
+def test_consent_survives_the_store_round_trip():
+    original = a_report(reporter_cleared=False)
+    assert Report.from_record(original.as_record()).reporter_cleared is False
+
+
+class RejectsLabels(FakeGitHub):
+    """A GitHub that 422s while labels are present, and accepts without them."""
+
+    async def create_issue(self, title, body, labels):
+        if labels:
+            return github_sink.PublishFailure("rejected", "label does not exist", retryable=False)
+        return await super().create_issue(title, body, [])
+
+
+def test_a_label_that_does_not_exist_does_not_lose_the_issue():
+    """`from-spider-bot` is absent from spider-swing (verified live 2026-09-04)
+    and GitHub's docs do not say what happens to an unknown label name."""
+    github = RejectsLabels()
+    svc = a_service(github)
+    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    result = run(svc.publish(out.report.id))
+    assert result.published
+    assert github.created[0][2] == []
+
+
+def test_a_rejection_that_is_not_about_labels_still_fails():
+    """The positive control: the bare retry must not swallow every 422."""
+    github = FakeGitHub(fail=github_sink.PublishFailure("rejected", "title too long"))
+    svc = a_service(github)
+    out = run(svc.file(category=Category.BUG, title="t", description="d"))
+    assert not run(svc.publish(out.report.id)).published

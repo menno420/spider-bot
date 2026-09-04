@@ -239,6 +239,19 @@ async def publish(client: GitHubClient, report: Report) -> PublishResult:
         log.info("github: %s already published as #%s", report.id, existing.number)
         return existing
 
-    return await client.create_issue(
-        report.public_title(), report.public_body(), report.labels()
-    )
+    title, body, labels = report.public_title(), report.public_body(), report.labels()
+    result = await client.create_issue(title, body, labels)
+    if isinstance(result, PublishFailure) and result.reason == "rejected" and labels:
+        # A 422 with labels present, retried once without them. `from-spider-bot`
+        # does NOT exist in menno420/spider-swing — verified live 2026-09-04, the
+        # repo has thirteen labels and that is not one of them — and GitHub's own
+        # docs do not say what happens to an unknown label name when the caller
+        # has push access. Losing a report to a label would be absurd, so the
+        # label is what gets dropped. This lives here rather than in the HTTP
+        # client because it is a policy decision about what matters, not a
+        # transport detail: every client gets it, and a fake can exercise it.
+        log.warning("github: create rejected with labels %s; retrying without", labels)
+        bare = await client.create_issue(title, body, [])
+        if isinstance(bare, Published):
+            return bare
+    return result

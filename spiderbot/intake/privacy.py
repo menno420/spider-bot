@@ -118,9 +118,23 @@ def classify(report: Report, *, ai_says_private: bool | None = None) -> Classifi
     nothing. A model cannot clear a report the deterministic pass held back,
     and a model failure (which arrives as `None`) cannot loosen anything.
     """
+    # EVERY field `Report.public_body` publishes is scanned, not just the
+    # obvious three. `device`, `ai_summary` and the evidence lines all reach a
+    # public issue, and a member typing an email address into the device box
+    # would otherwise have it published — the classifier would never have seen
+    # it. The rule is: the scanned set is the published set.
     text = " ".join(
         part
-        for part in (report.title, report.description, report.repro_steps)
+        for part in (
+            report.title,
+            report.description,
+            report.repro_steps,
+            report.device,
+            report.build_version,
+            report.ai_summary,
+            " ".join(report.ai_tags),
+            " ".join(report.evidence_summary),
+        )
         if part
     )
 

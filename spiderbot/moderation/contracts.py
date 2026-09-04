@@ -38,6 +38,15 @@ POLICY_VERSION = "1"
 
 MAX_REASON_CHARS = 400
 MAX_QUOTE_CHARS = 400
+#: A quote shorter than this is not evidence: a single character is present in
+#: almost any message, so the containment check passes on it and the
+#: anti-hallucination property is lost. `MEASURED` 2026-09-04: a fabricated
+#: harassment verdict at confidence 0.99 against "the reel button feels a bit
+#: weak" was accepted on `evidence_quote: "a"`.
+#: The exception is a message shorter than the floor, where quoting the whole
+#: message is the only honest thing a model can do — so that is allowed
+#: explicitly rather than making short messages unjudgeable.
+MIN_QUOTE_CHARS = 8
 
 
 class Category(StrEnum):
@@ -140,6 +149,7 @@ class Rejection(StrEnum):
     BAD_CONFIDENCE = "bad_confidence"
     QUOTE_NOT_IN_CONTENT = "quote_not_in_content"
     QUOTE_MISSING = "quote_missing"
+    QUOTE_TOO_SHORT = "quote_too_short"
     EMPTY_RESPONSE = "empty_response"
 
 
@@ -287,7 +297,12 @@ def parse_verdict(raw: str | None, *, content: str, model: str) -> ParseResult:
     else:
         if not quote.strip():
             return ParseResult(rejection=Rejection.QUOTE_MISSING)
-        if _normalise(quote) not in _normalise(content):
+        normalised_quote = _normalise(quote)
+        normalised_content = _normalise(content)
+        if len(normalised_quote) < MIN_QUOTE_CHARS and normalised_quote != normalised_content:
+            # Too short to be evidence, and not the whole message either.
+            return ParseResult(rejection=Rejection.QUOTE_TOO_SHORT, detail=quote[:40])
+        if normalised_quote not in normalised_content:
             # The check that catches an invented message, the wrong message, or
             # an injected instruction persuading the model to "quote" something
             # nobody wrote.
@@ -319,9 +334,10 @@ Return ONE JSON object and nothing else, with exactly these keys:
   "confidence": number between 0.0 and 1.0
   "reason": one short sentence, at most {reason} characters, describing WHY
   "evidence_quote": the exact substring of the message that shows it, copied
-      character-for-character from the message. If category is "none", use "".
-      A quote that is not present verbatim in the message is discarded and the
-      whole verdict with it.
+      character-for-character from the message, at least {min_quote} characters
+      long (or the whole message if it is shorter than that). If category is
+      "none", use "". A quote that is not present verbatim in the message is
+      discarded and the whole verdict with it.
   "recommended_operation": one of {operations}
   "human_review_required": true or false
   "targets_member": true if the conduct is aimed at a specific person present
@@ -330,6 +346,7 @@ Return ONE JSON object and nothing else, with exactly these keys:
     categories=", ".join(f'"{c}"' for c in Category),
     operations=", ".join(f'"{o}"' for o in Operation),
     reason=MAX_REASON_CHARS,
+    min_quote=MIN_QUOTE_CHARS,
 )
 
 

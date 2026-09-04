@@ -136,8 +136,27 @@ def encode_chunks(collection: str, key: str, data: dict[str, Any]) -> list[str] 
             "n": len(slices),
             "d": part,
         }
-        out.append(f"{_FENCE}\n{json.dumps(envelope, ensure_ascii=False)}\n```")
+        out.append(f"{_FENCE}\n{_escape_backticks(envelope)}\n```")
     return out
+
+
+def _escape_backticks(envelope: dict[str, Any]) -> str:
+    """Serialise an envelope so the emitted text contains NO literal backtick.
+
+    The envelope rides inside a ```json fence and `decode_chunk` finds its end
+    by splitting on the next fence. A record whose own content contains a
+    backtick run therefore truncated the envelope and the record became
+    unreadable — silently, which is the worst kind. `MEASURED` 2026-09-04: a
+    bug report quoting a crash log inside a fenced block (exactly what a tester
+    pastes) round-tripped to `{}`.
+
+    The fix is not to escape the fence but to emit no backticks at all: JSON's
+    own `\u0060` escape means the same character to every parser and is not a
+    backtick in the text. So the split cannot be confused by content, whatever
+    the content is. Old records are unaffected — a reader of them is unchanged,
+    and any that contained a backtick was already unreadable.
+    """
+    return json.dumps(envelope, ensure_ascii=False).replace("`", "\\u0060")
 
 
 def decode_chunk(content: str) -> dict[str, Any] | None:

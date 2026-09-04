@@ -223,3 +223,37 @@ def test_writes_never_ping_anyone():
     run(store.DiscordChannelStore(channel).append(store.REPORTS, "K", {"a": "@everyone"}))
     _args, kwargs = channel.sent[0]
     assert kwargs["allowed_mentions"].everyone is False
+
+
+# -- the fence bug, found by the design pilot reading committed code ----------
+
+TICKS = "`" * 3
+
+
+def test_a_record_containing_a_code_fence_survives_the_round_trip():
+    """MEASURED 2026-09-04, and it was silent data loss: the envelope rides in
+    a ```json fence and `decode_chunk` split on the next fence, so a bug report
+    quoting a crash log — exactly what a tester pastes — decoded to nothing."""
+    record = {
+        "id": "SB-R-1",
+        "description": f"my log said:\n{TICKS}\nE/Godot: crash\n{TICKS}\nthen it froze",
+    }
+    chunks = store.encode_chunks("reports", "SB-R-1", record)
+    assert store.decode_chunk(chunks[0]) is not None
+    assert store.assemble([store.decode_chunk(c) for c in chunks])["SB-R-1"] == record
+
+
+def test_the_wire_text_contains_no_backtick_at_all_inside_the_fence():
+    """The property that makes the fix hold for any content, not just fences."""
+    chunks = store.encode_chunks("reports", "K", {"d": f"{TICKS} ` `` {TICKS}"})
+    for chunk in chunks:
+        body = chunk.split("```json\n", 1)[1].rsplit("\n```", 1)[0]
+        assert "`" not in body
+
+
+def test_a_backtick_heavy_record_still_round_trips_through_a_backend():
+    channel = FakeChannel(id=900, name="bot-state")
+    backing = store.DiscordChannelStore(channel)
+    record = {"log": TICKS + "x" * 3000 + TICKS}
+    assert run(backing.append(store.REPORTS, "K", record))
+    assert run(store.DiscordChannelStore(channel).get(store.REPORTS, "K")) == record

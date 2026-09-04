@@ -84,8 +84,20 @@ class Status(StrEnum):
 #: Statuses from which publication may still be attempted. A published report
 #: is never re-published; that is half of idempotency, enforced by type rather
 #: than by remembering to check.
+#:
+#: `RESOLVED` and `DUPLICATE` are HERE deliberately, and the reason is a real
+#: sequence: a moderator marking a report resolved before the retry queue has
+#: drained would otherwise make it permanently unpublishable, so a GitHub
+#: outage plus a tidy moderator equals a silently dropped report. Lifecycle and
+#: developer judgement are different axes; `Status` is the lifecycle one.
 PUBLISHABLE_STATUSES: frozenset[Status] = frozenset(
-    {Status.STORED, Status.PUBLISH_PENDING, Status.PUBLISH_FAILED}
+    {
+        Status.STORED,
+        Status.PUBLISH_PENDING,
+        Status.PUBLISH_FAILED,
+        Status.RESOLVED,
+        Status.DUPLICATE,
+    }
 )
 
 
@@ -160,6 +172,13 @@ class Report:
     github_issue_url: str = ""
     duplicate_of: str = ""
 
+    #: Whether the reporter agreed to this leaving the server. An explicit form
+    #: submission IS that agreement — they typed it into a form whose button
+    #: said what it does — so entry points set it True. The conversational path
+    #: sets it only when the person presses confirm on the summary the bot
+    #: showed them, which is the brief's own sequence.
+    reporter_cleared: bool = True
+
     status: Status = Status.DRAFT
     resolution: str = ""
     schema_version: int = SCHEMA_VERSION
@@ -171,16 +190,17 @@ class Report:
     def is_public_safe(self) -> bool:
         """The single predicate the GitHub sink checks. Nothing else may.
 
-        Three conditions, and every one of them is a real failure mode:
-        an explicit `PUBLIC_SAFE` (so `UNCLASSIFIED` never leaks), a category
-        that can be public at all, and a classification reason on the record
-        (so an unclassified report cannot be waved through by setting one
-        field).
+        Four conditions, and every one of them is a real failure mode: an
+        explicit `PUBLIC_SAFE` (so `UNCLASSIFIED` never leaks), a category that
+        can be public at all, a classification reason on the record (so an
+        unclassified report cannot be waved through by setting one field), and
+        the reporter's own agreement.
         """
         return (
             self.sensitivity is Sensitivity.PUBLIC_SAFE
             and self.category is not Category.COMPLAINT
             and bool(self.sensitivity_reason)
+            and self.reporter_cleared
         )
 
     @property
@@ -237,7 +257,14 @@ class Report:
                 f"_Attached by the reporter, format `{gh(self.evidence_format, limit=64)}`, "
                 "validated against the game's committed schema._",
                 "",
-                *[f"- {line}" for line in self.evidence_summary],
+                # Escaped HERE, not where the summary was produced. These
+                # lines come from `evidence.Evidence.summary_lines`, whose
+                # escaper is chosen per destination — and a summary rendered
+                # for Discord carries backslash escapes that mean nothing on
+                # GitHub while leaving `#123` live as a cross-reference. Re-
+                # escaping is the only way this body can promise anything
+                # about text it did not render itself.
+                *[f"- {gh(line, limit=400)}" for line in self.evidence_summary],
             ]
         if self.ai_summary:
             lines += [
@@ -307,6 +334,7 @@ class Report:
             "ai_tags": list(self.ai_tags),
             "sensitivity": str(self.sensitivity),
             "sensitivity_reason": self.sensitivity_reason,
+            "reporter_cleared": self.reporter_cleared,
             "github_issue_number": self.github_issue_number,
             "github_issue_url": self.github_issue_url,
             "duplicate_of": self.duplicate_of,
@@ -352,6 +380,7 @@ class Report:
             ai_tags=tuple(str(x) for x in (data.get("ai_tags") or []))[:MAX_TAGS],
             sensitivity=sensitivity,
             sensitivity_reason=str(data.get("sensitivity_reason") or ""),
+            reporter_cleared=bool(data.get("reporter_cleared", True)),
             github_issue_number=data.get("github_issue_number"),
             github_issue_url=str(data.get("github_issue_url") or ""),
             duplicate_of=str(data.get("duplicate_of") or ""),
