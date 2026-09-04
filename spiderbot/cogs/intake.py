@@ -38,6 +38,7 @@ from discord.ext import commands
 from spiderbot import audit, ids, redact, style
 from spiderbot.intake.models import Category, Reporter
 from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
+from spiderbot.ui.safe import safe_defer, safe_edit, safe_followup
 
 log = logging.getLogger("spiderbot.cogs.intake")
 
@@ -141,17 +142,23 @@ class ConfirmFiling(
         return cls(match["draft"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        # Defer FIRST. This button is a `DynamicItem` precisely so it survives
+        # a deploy — and after a deploy the store index is cold, so the very
+        # first press pays a 2000-message history scan before anything touches
+        # the interaction. Discord kills the token at 3 seconds; the member
+        # then sees "This interaction failed" on a button that is working.
+        if not await safe_defer(interaction, ephemeral=True):
+            return
         bot = interaction.client
         service = getattr(bot, "intake", None)
         backing = getattr(service, "_store", None)
         if service is None or backing is None:
-            await interaction.response.send_message(
-                "I cannot save that right now.", ephemeral=True
-            )
+            await safe_followup(interaction, "I cannot save that right now.", ephemeral=True)
             return
         draft = await backing.get(DRAFTS, self.draft_id)
         if draft is None:
-            await interaction.response.send_message(
+            await safe_followup(
+                interaction,
                 "That offer has expired - tell me again and I will write it down.",
                 ephemeral=True,
             )
@@ -160,8 +167,8 @@ class ConfirmFiling(
         # this is, and only they may save it. A panel in a public channel is
         # pressable by anyone, so this is not optional.
         if draft.get("user_id") != interaction.user.id:
-            await interaction.response.send_message(
-                "That is someone else's report.", ephemeral=True
+            await safe_followup(
+                interaction, "That is someone else's report.", ephemeral=True
             )
             return
         # The draft is consumed, not just read. This item is rebuilt from its
@@ -170,8 +177,8 @@ class ConfirmFiling(
         # flaky connection - would otherwise file the same report twice.
         already = draft.get("filed_report_id")
         if already:
-            await interaction.response.send_message(
-                f"Already saved as `{already}`.", ephemeral=True
+            await safe_followup(
+                interaction, f"Already saved as `{already}`.", ephemeral=True
             )
             return
         try:
@@ -194,7 +201,8 @@ class ConfirmFiling(
             await backing.append(
                 DRAFTS, self.draft_id, {**draft, "filed_report_id": outcome.report.id}
             )
-        await interaction.response.edit_message(
+        await safe_edit(
+            interaction,
             content=None,
             embed=style.embed(
                 title=f"{style.OK} Written down",
@@ -239,6 +247,8 @@ class DismissFiling(
         return cls(match["draft"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if not await safe_defer(interaction, ephemeral=True):
+            return
         backing = getattr(getattr(interaction.client, "intake", None), "_store", None)
         draft = await backing.get(DRAFTS, self.draft_id) if backing else None
         # A draft that has expired out of the store is nobody's to protect and
@@ -246,13 +256,11 @@ class DismissFiling(
         # failure direction is a stale panel someone can tidy, not a live
         # report someone else can silence.
         if draft is not None and draft.get("user_id") != interaction.user.id:
-            await interaction.response.send_message(
-                "That is someone else's report.", ephemeral=True
+            await safe_followup(
+                interaction, "That is someone else's report.", ephemeral=True
             )
             return
-        await interaction.response.edit_message(
-            content="No problem.", embed=None, view=None
-        )
+        await safe_edit(interaction, content="No problem.", embed=None, view=None)
         audit.stdout_event("intake_offer_declined", user=str(interaction.user))
 
 

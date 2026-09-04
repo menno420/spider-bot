@@ -829,6 +829,20 @@ def test_one_member_cannot_flood_the_store():
 # -- the two buttons on a PUBLIC offer panel ---------------------------------
 
 
+def _said(interaction) -> str:
+    """Everything the callback replied with, whichever route it used.
+
+    Both callbacks defer first (a cold store read can outlive Discord's
+    3-second interaction window), so their answers arrive as followups rather
+    than as an initial response.
+    """
+    parts = [
+        content or ""
+        for content, _kw in [*interaction.response.messages, *interaction.followup.messages]
+    ]
+    return " ".join(parts)
+
+
 class _Bot:
     """Just enough bot for a DynamicItem callback: it reads `bot.intake`."""
 
@@ -867,7 +881,7 @@ def test_a_stranger_cannot_dismiss_someone_elses_report_offer():
 
     run(intake_cog.DismissFiling(draft_id).callback(interaction))
     assert interaction.response.edits == [], "the offer must still be there"
-    assert "someone else" in (interaction.response.messages[0][0] or "")
+    assert "someone else" in _said(interaction)
 
     # Positive control: the reporter themselves CAN dismiss it.
     mine = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
@@ -892,7 +906,7 @@ def test_a_double_press_on_save_files_one_report_not_two():
     run(button.callback(second))
 
     assert len(run(svc.all_reports())) == 1
-    assert "Already saved" in (second.response.messages[0][0] or "")
+    assert "Already saved" in _said(second)
 
 
 # -- the real HTTP client's own robustness -----------------------------------

@@ -257,3 +257,122 @@ def test_a_backtick_heavy_record_still_round_trips_through_a_backend():
     record = {"log": TICKS + "x" * 3000 + TICKS}
     assert run(backing.append(store.REPORTS, "K", record))
     assert run(store.DiscordChannelStore(channel).get(store.REPORTS, "K")) == record
+
+
+# -- what an adversarial review executed against the committed code -----------
+
+
+def test_two_concurrent_cold_reads_do_not_lose_a_record():
+    """`MEASURED` 2026-09-04, the CRITICAL of that review.
+
+    Two members filed at the same moment. Both writes started a cold scan; the
+    first scan finished after the second write had landed and REPLACED the
+    index with a snapshot taken before it. The record was durably in the
+    channel and absent from every read path for the life of the process — "My
+    reports" showed nothing, `/publish <id>` said no such report — while its
+    reporter had been told "Saved. Your reference is …".
+    """
+    import asyncio as _asyncio
+
+    channel = SlowHistoryChannel()
+    backing = store.DiscordChannelStore(channel)
+
+    async def scenario():
+        # Two writers racing, exactly as two members pressing at once.
+        await _asyncio.gather(
+            backing.append(store.REPORTS, "SB-R-ALICE", {"id": "SB-R-ALICE"}),
+            backing.append(store.REPORTS, "SB-R-BOB", {"id": "SB-R-BOB"}),
+        )
+        return (
+            await backing.get(store.REPORTS, "SB-R-ALICE"),
+            await backing.get(store.REPORTS, "SB-R-BOB"),
+        )
+
+    alice, bob = run(scenario())
+    assert alice is not None, "alice was told 'Saved' and must be readable"
+    assert bob is not None
+    assert channel.scans == 1, "one cold scan, reused by everyone who queued"
+
+
+class SlowHistoryChannel(FakeChannel):
+    """A channel whose history scan yields control, so a write can land inside
+    it — which is the whole race. A scan that never awaits cannot reproduce it."""
+
+    def __init__(self) -> None:
+        super().__init__(id=900, name="intake-state")
+        self.scans = 0
+        self.guild = None
+
+    def history(self, *, limit: int = 100):
+        import asyncio as _asyncio
+
+        self.scans += 1
+        contents = [a[0] for a, _kw in self.sent if a]
+        snapshot = list(reversed(contents))[:limit]
+
+        class _Slow:
+            def __aiter__(inner):
+                inner._i = 0
+                return inner
+
+            async def __anext__(inner):
+                await _asyncio.sleep(0)  # the yield point the race needs
+                if inner._i >= len(snapshot):
+                    raise StopAsyncIteration
+                item = snapshot[inner._i]
+                inner._i += 1
+                from types import SimpleNamespace
+
+                return SimpleNamespace(content=item, author=SimpleNamespace(id=1))
+
+        return _Slow()
+
+
+def test_only_the_bots_own_messages_are_read_as_records():
+    """`decode_chunk` used to accept ANY message in the channel, so anyone who
+    could post there could mint a record — including one marked
+    `sensitivity: public_safe` that the next retry would publish. The channel is
+    staff-private by design, so this is depth, not a member-reachable hole."""
+    from types import SimpleNamespace
+
+    class GuildedChannel(FakeChannel):
+        def __init__(self) -> None:
+            super().__init__(id=901, name="intake-state")
+            self.guild = SimpleNamespace(me=SimpleNamespace(id=999))
+            self.rows: list = []
+
+        async def send(self, *args, **kwargs):
+            self.rows.append((args[0], 999))
+
+        def history(self, *, limit: int = 100):
+            rows = list(reversed(self.rows))[:limit]
+
+            class _It:
+                def __aiter__(inner):
+                    inner._i = 0
+                    return inner
+
+                async def __anext__(inner):
+                    if inner._i >= len(rows):
+                        raise StopAsyncIteration
+                    content, author_id = rows[inner._i]
+                    inner._i += 1
+                    return SimpleNamespace(
+                        content=content, author=SimpleNamespace(id=author_id)
+                    )
+
+            return _It()
+
+    channel = GuildedChannel()
+    backing = store.DiscordChannelStore(channel)
+    run(backing.append(store.REPORTS, "SB-R-REAL", {"id": "SB-R-REAL"}))
+
+    # An impostor row written by somebody else, in the same wire format.
+    forged = store.encode_chunks(store.REPORTS, "SB-R-FORGED", {"id": "SB-R-FORGED"})
+    channel.rows.append((forged[0], 12345))
+
+    fresh = store.DiscordChannelStore(channel)
+    assert run(fresh.get(store.REPORTS, "SB-R-FORGED")) is None
+    # Positive control: the bot's own row is still read, so the filter is about
+    # authorship and not about the decoder having stopped working.
+    assert run(fresh.get(store.REPORTS, "SB-R-REAL")) is not None

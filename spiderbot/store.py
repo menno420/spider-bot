@@ -48,6 +48,7 @@ bug, and the intake service is written so it cannot.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -75,6 +76,14 @@ MAX_CHUNKS = 40
 # this is thousands of records; a channel that outgrows it needs the database
 # this seam exists to make cheap.
 HISTORY_LIMIT = 2000
+#: Every Discord call this module makes is awaited from inside a listener or an
+#: interaction callback. Without a budget, a wedged call — a Discord incident,
+#: a rate limit with a long retry — leaves those tasks pending for ever: a
+#: member sees a button that never answers and a report that never lands, with
+#: nothing in the log saying why. `append` already returns False on failure and
+#: every caller reports that honestly, so a timeout has somewhere to go.
+WRITE_TIMEOUT_S = 15.0
+HISTORY_TIMEOUT_S = 60.0
 
 
 class StoreUnavailable(Exception):
@@ -283,6 +292,18 @@ class DiscordChannelStore:
     def __init__(self, channel) -> None:
         self._channel = channel
         self._index: dict[str, dict[str, dict[str, Any]]] | None = None
+        #: Held across the whole cold scan. `MEASURED` 2026-09-04: two members
+        #: filing at the same moment started two scans; the first finished
+        #: after the second had written, and REPLACED the index with a snapshot
+        #: taken before that write. The record was durably in the channel and
+        #: absent from every read path for the life of the process — "My
+        #: reports" showed nothing, `/publish <id>` said no such report — while
+        #: the reporter had been told "Saved. Your reference is …".
+        self._index_lock = asyncio.Lock()
+        #: A write that lands while a cold scan is in flight. The scan cannot
+        #: see it (it is reading a snapshot of history from before the send),
+        #: so it is replayed onto the finished index rather than lost.
+        self._pending_writes: list[tuple[str, str, dict[str, Any]]] = []
 
     @property
     def available(self) -> bool:
@@ -293,11 +314,41 @@ class DiscordChannelStore:
             return True
         if self._channel is None:
             return False
+        async with self._index_lock:
+            # Re-checked after acquiring: everyone who queued behind the one
+            # scan reuses its result instead of starting another.
+            if self._index is not None:
+                return True
+            return await self._build_index()
+
+    async def _build_index(self) -> bool:
+        try:
+            return await asyncio.wait_for(self._scan(), timeout=HISTORY_TIMEOUT_S)
+        except TimeoutError:
+            log.error(
+                "store: history scan exceeded %ss; index stays cold and the next "
+                "call retries rather than serving a partial store",
+                HISTORY_TIMEOUT_S,
+            )
+            return False
+
+    async def _scan(self) -> bool:
         envelopes: list[dict[str, Any]] = []
         read = 0
         try:
+            me = getattr(getattr(self._channel, "guild", None), "me", None)
+            my_id = getattr(me, "id", None)
             async for message in self._channel.history(limit=HISTORY_LIMIT):
                 read += 1
+                # Only the bot's OWN messages are records. `decode_chunk` used
+                # to accept any message in the channel, so anyone who could
+                # post there could mint a record — including one marked
+                # `sensitivity: public_safe` that the next retry would publish.
+                # The channel is staff-private by design, so this is defence in
+                # depth rather than a member-reachable hole; it costs one
+                # comparison and removes a whole class of question.
+                if my_id is not None and getattr(message.author, "id", None) != my_id:
+                    continue
                 env = decode_chunk(getattr(message, "content", ""))
                 if env is not None:
                     envelopes.append(env)
@@ -324,7 +375,17 @@ class DiscordChannelStore:
             by_collection.setdefault(env["c"], []).append(env)
         for collection, group in by_collection.items():
             index[collection] = assemble(group)
+        # Replay anything written while this scan was in flight. The history
+        # iterator saw a snapshot from before those sends, so without this the
+        # index would come up already missing a record its writer was told was
+        # saved.
+        for collection, key, data in self._pending_writes:
+            index.setdefault(collection, {})[key] = data
+        replayed = len(self._pending_writes)
+        self._pending_writes.clear()
         self._index = index
+        if replayed:
+            log.info("store: replayed %s write(s) that landed during the scan", replayed)
         log.info(
             "store: index built — %s",
             ", ".join(f"{c}={len(r)}" for c, r in index.items()) or "empty",
@@ -343,19 +404,27 @@ class DiscordChannelStore:
         await self._ensure_index()
         for chunk in chunks:
             try:
-                await self._channel.send(
-                    chunk, allowed_mentions=discord.AllowedMentions.none()
+                await asyncio.wait_for(
+                    self._channel.send(
+                        chunk, allowed_mentions=discord.AllowedMentions.none()
+                    ),
+                    timeout=WRITE_TIMEOUT_S,
                 )
-            except discord.HTTPException:
+            except (discord.HTTPException, TimeoutError):
                 log.warning(
                     "store: write failed part-way for %s/%s — record not stored",
                     collection, key,
                 )
                 return False
+        stored = json.loads(json.dumps(data, default=str))
         if self._index is not None:
-            self._index.setdefault(collection, {})[key] = json.loads(
-                json.dumps(data, default=str)
-            )
+            self._index.setdefault(collection, {})[key] = stored
+        else:
+            # No index yet: either nothing has read, or a cold scan is running
+            # right now and cannot see this send. Queue it either way — an
+            # unstarted scan discards the queue harmlessly by reading the
+            # channel, and a running one replays it.
+            self._pending_writes.append((collection, key, stored))
         return True
 
     async def get(self, collection: str, key: str) -> dict[str, Any] | None:

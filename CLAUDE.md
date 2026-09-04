@@ -231,6 +231,40 @@ structural change - that plan outranks preferences you arrive with.
     missed the three Unicode line breaks. A filter is the belt; containment is
     the braces, and the braces go on.
 
+41. **A brake arms BEFORE the thing it protects, never after it.** This
+    codebase measured the same defect three times in one review: the intake
+    offer cooldown armed after a successful reply, the initiative hourly cap
+    armed after a successful delivery (500 model calls against a cap of 10, by
+    one member deleting their own messages), and the mention path had no brake
+    at all. Ask what a brake protects and arm it there — the API budget at the
+    model call, the store at the write. The one deliberate exception is the
+    initiative COOLDOWN, which protects the CHANNEL and so still arms on
+    delivery; initiative answers PASS most of the time and consuming it on
+    every decline would mean the bot never speaks.
+
+42. **The cold store index is built once, under a lock, and a write that lands
+    during the scan is replayed onto it.** Two members filing at the same
+    moment started two scans; the first finished after the second write and
+    replaced the index with a snapshot from before it. The record was durably
+    in the channel and absent from every read path for the life of the process,
+    while its reporter had been told "Saved. Your reference is …". Only the
+    bot's own messages are read as records, and every Discord call in the store
+    has a timeout — `append` already returns False and every caller reports
+    that honestly, so a timeout has somewhere to go.
+
+43. **A listener never touches `message.channel.name`.** Any member can archive
+    a thread they created, after which discord.py hands the listener a
+    `PartialMessageable` with no `.name` — so `getattr(..., "name", "") or ""`
+    at the top, everywhere. That is invariant 2 ("no listener may raise") made
+    reachable by member action.
+
+44. **A persistent button defers before it does anything slow.** A
+    `DynamicItem` exists to survive a deploy, and after a deploy the store
+    index is cold — so the first press pays a 2000-message history scan while
+    Discord kills the token at 3 seconds and the member sees "This interaction
+    failed" on a button that is working. `safe_defer` first, then
+    `safe_followup` / `safe_edit`.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must
