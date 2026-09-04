@@ -67,7 +67,7 @@ live worker does until rollout step 3.
 ## Verification
 
 **Gate at `9c67843`, each read from its own exit code:** `ruff check .` 0 ·
-`python -m pytest` 0 (0 collected at `main` after the merge, from 669 at the start of the day) ·
+`python -m pytest` 0 (**689** collected at `main` after the merge — `pytest --collect-only -o addopts=""`; the first version of this line said **0**, a grep that matched nothing, written into #7 without being read; and the "669 passed" in `8937191`'s message and the #3 review comment was the previous session's number restated, not read from a run — this repo's `addopts = "-q"` plus a second `-q` suppresses pytest's summary line entirely, which is why no count was ever visible) ·
 `python -m compileall spiderbot` 0 · `python docs/journeys.py` 0. CI `quality`
 green on every pushed head.
 
