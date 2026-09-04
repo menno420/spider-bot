@@ -41,7 +41,13 @@ from discord.ext import commands
 from spiderbot import audit, evidence, ids, redact, style
 from spiderbot.intake.models import Category, Reporter
 from spiderbot.ui.base import Panel
-from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
+from spiderbot.ui.forms import (
+    BotProblemModal,
+    BugReportModal,
+    ComplaintModal,
+    FeedbackModal,
+    IdeaModal,
+)
 from spiderbot.ui.safe import safe_defer, safe_edit, safe_followup
 
 log = logging.getLogger("spiderbot.cogs.intake")
@@ -594,6 +600,7 @@ class IntakeCog(commands.Cog):
             app_commands.Choice(name="a bug", value="bug"),
             app_commands.Choice(name="an idea", value="idea"),
             app_commands.Choice(name="how the game feels", value="gameplay_feedback"),
+            app_commands.Choice(name="a problem with Spider Bot", value="bot_problem"),
             app_commands.Choice(name="something private", value="complaint"),
         ]
     )
@@ -604,6 +611,7 @@ class IntakeCog(commands.Cog):
             "bug": BugReportModal,
             "idea": IdeaModal,
             "gameplay_feedback": FeedbackModal,
+            "bot_problem": BotProblemModal,
             "complaint": ComplaintModal,
         }[kind.value]
         await interaction.response.send_modal(modal(self.bot))
@@ -660,7 +668,7 @@ class IntakeCog(commands.Cog):
             await interaction.followup.send(
                 embed=style.embed(
                     title=(
-                        f"{style.WARN} Publish this to {self.cfg.github_repo}?"
+                        f"{style.WARN} Publish this to {service.repo_for(report)}?"
                         if number == 1
                         else f"…continued ({number} of {len(pages)})"
                     ),

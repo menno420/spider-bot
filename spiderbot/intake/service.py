@@ -45,6 +45,7 @@ from spiderbot.intake.models import (
     Reporter,
     Sensitivity,
     Status,
+    Target,
 )
 
 log = logging.getLogger("spiderbot.intake")
@@ -92,10 +93,17 @@ class IntakeService:
         backing: store.Store,
         github: github_sink.GitHubClient | None = None,
         *,
+        bot_github: github_sink.GitHubClient | None = None,
         now=time.time,
     ) -> None:
         self._store = backing
         self._github = github or github_sink.NullGitHubClient()
+        #: The tracker for reports about the bot itself (owner, 2026-09-04).
+        #: Absent means a bot report is refused BY NAME and stays queued — it
+        #: is never quietly sent to the game's tracker instead.
+        self._bot_github = bot_github or github_sink.NullGitHubClient(
+            "no GitHub client is configured for reports about the bot"
+        )
         self._now = now
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         #: report id -> the issue GitHub created when the store write that
@@ -105,6 +113,27 @@ class IntakeService:
         self._published_unrecorded: dict[str, github_sink.Published] = {}
         #: reporter user id -> the timestamps of their recent filings.
         self._recent_filings: dict[int, list[float]] = defaultdict(list)
+
+    # -- routing --------------------------------------------------------------
+
+    def client_for(self, report: Report) -> github_sink.GitHubClient:
+        """The one client this report may be projected through.
+
+        `Report.target` decides, and it decides from the category alone, so a
+        report cannot steer itself to the other tracker by what it says.
+        """
+        return self._bot_github if report.target is Target.BOT else self._github
+
+    def repo_for(self, report: Report) -> str:
+        """The repository a publish would post to, for the human who confirms."""
+        # `getattr`: the Protocol names `repo`, but a client is any object with
+        # the three publish methods, and the name is for a human's eyes only.
+        return getattr(self.client_for(report), "repo", "") or "(no repository configured)"
+
+    @property
+    def can_publish(self) -> bool:
+        """Whether ANY tracker is reachable — what a retry loop should ask."""
+        return self._github.available or self._bot_github.available
 
     # -- filing ---------------------------------------------------------------
 
@@ -344,7 +373,7 @@ class IntakeService:
             pending = report.with_(status=Status.PUBLISH_PENDING)
             await self._store.append(store.REPORTS, report.id, pending.as_record())
 
-            result = await github_sink.publish(self._github, pending)
+            result = await github_sink.publish(self.client_for(pending), pending)
             if isinstance(result, github_sink.Published):
                 final = pending.with_(
                     status=Status.PUBLISHED,

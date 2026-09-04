@@ -98,17 +98,26 @@ round 3's. A fix moves a problem; the new place has not been looked at.
 
 ## Deployment outcome
 
-**Not verified — and deliberately not claimed.** The PR was left for the owner
-rather than merged: this bot is live in a real server, `main` deploys straight
-to production with no gate, and the four things this branch most needs are his
-decisions, not mine (two private channels, a GitHub token, and whether to point
-moderation at any channel at all).
+**VERIFIED 2026-09-04 by the next session** (`.sessions/2026-09-04-bot-reports-routing.md`),
+after the owner said merge. spider-bot#3 merged at his word at
+`2026-09-04T18:42:14Z` as merge commit **`5a7f8a285a095855e0450b7c237d184344d5a580`**
+(24 commits; the 24th, `8937191`, was the review pass). Railway deployment
+`6f5c7648-3e6c-40a2-acfc-e46cd93b685a`: created `18:42:16Z`, **SUCCESS** by
+`18:43:06Z`, and its **`meta.commitHash` = `5a7f8a28…` = `main` HEAD** — the
+check this section asked for, not the status. The previous live deployment
+(`bc4f9985`) reads REMOVED. Startup read from the deployment log: `synced 12
+guild commands` · `channels not found (features degrade): bot-state,
+case-state, intake-state` (the two new state channels do not exist yet — by
+design) · the `ready` audit event with `channels=["announcements",
+"bug-reports","feedback","general","mod-log","start-here"]`, `intake=false`,
+`github=false`, `moderation="off"`, **`support_feed="feed"`** (the live
+spider-swing feed reached the worker on first boot). What the log cannot show
+and only the owner can: `/home` opens, `/tester count` answers, the AI still
+replies on mention.
 
-When it merges, the check is `meta.commitHash` on the new Railway deployment
-equalling HEAD — **not** the deploy status. And note the honest complication:
-`.railway/railway.ts` sets watch patterns (`spiderbot/**`, `requirements.txt`,
-`.python-version`), and this branch touches `spiderbot/`, so it
-**will** deploy. Preserved exactly; a docs-only follow-up deliberately will not.
+*(The paragraph this replaces, kept for the record: "Not verified — and
+deliberately not claimed. The PR was left for the owner rather than merged …
+this branch touches `spiderbot/`, so it will deploy." It did.)*
 
 ## Next session
 

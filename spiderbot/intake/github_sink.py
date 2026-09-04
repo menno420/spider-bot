@@ -80,6 +80,9 @@ class GitHubClient(Protocol):
     @property
     def available(self) -> bool: ...
 
+    @property
+    def repo(self) -> str: ...
+
     async def find_issue_by_marker(self, marker: str) -> Published | None: ...
 
     async def create_issue(
@@ -96,6 +99,10 @@ class NullGitHubClient:
     @property
     def available(self) -> bool:
         return False
+
+    @property
+    def repo(self) -> str:
+        return ""
 
     async def find_issue_by_marker(self, marker: str) -> Published | None:
         return None
@@ -120,6 +127,10 @@ class HttpGitHubClient:
     @property
     def available(self) -> bool:
         return bool(self._token and self._repo)
+
+    @property
+    def repo(self) -> str:
+        return self._repo
 
     def _headers(self) -> dict[str, str]:
         return {

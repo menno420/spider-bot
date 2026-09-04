@@ -255,6 +255,75 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         )
 
 
+class BotProblemModal(discord.ui.Modal, title="Report a problem with Spider Bot"):
+    """A problem with the bot itself — routed to spider-bot's own tracker.
+
+    Owner, 2026-09-04: "the panel button did nothing" is not a game issue, and
+    it does not belong on the game's tracker. Its own form rather than a flag
+    on the bug form, because the category is set by the form the member chose
+    and never inferred from what they typed (`Report.target`).
+    """
+
+    summary = discord.ui.TextInput(
+        label="One-line summary",
+        max_length=90,
+        placeholder="e.g. The Reports button in /home did nothing",
+    )
+    details = discord.ui.TextInput(
+        label="What happened, and what you expected",
+        style=discord.TextStyle.paragraph,
+        max_length=1200,
+    )
+    steps = discord.ui.TextInput(
+        label="What you pressed or typed just before",
+        style=discord.TextStyle.paragraph,
+        max_length=800,
+        required=False,
+        placeholder="The command or button, in order. " + PUBLIC_NOTICE,
+    )
+
+    def __init__(self, bot) -> None:
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await safe_defer(interaction, ephemeral=True):
+            return
+        steps = str(self.steps.value or "").strip() or "(not given)"
+        body = (
+            f"**What happened**\n{self.details.value}\n\n"
+            f"**Just before it**\n{steps}\n\n"
+            f"*Reported by {interaction.user.display_name} via the bot-problem form*"
+        )
+        outcome = await file_report(
+            self.bot,
+            interaction,
+            category=Category.BOT_PROBLEM,
+            title=str(self.summary.value),
+            description=str(self.details.value),
+            repro_steps=steps,
+        )
+        receipt = await _deliver(
+            self.bot,
+            "bug-reports",
+            f"[Spider Bot] {self.summary.value}",
+            body,
+            interaction.user,
+        )
+        await safe_followup(
+            interaction,
+            embed=_receipt_embed(
+                self.bot, "Bot problem reported", receipt_for(outcome, receipt)
+            ),
+            ephemeral=True,
+        )
+        audit.stdout_event(
+            "bot_problem_submitted",
+            user=str(interaction.user),
+            report_id=getattr(getattr(outcome, "report", None), "id", None),
+        )
+
+
 class AskModal(discord.ui.Modal, title="Ask Spider Bot"):
     """A question for the AI, asked without needing to @-mention anything.
 

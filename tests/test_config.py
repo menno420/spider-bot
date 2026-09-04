@@ -22,6 +22,10 @@ _ALL_VARS = (
     "AI_INITIATIVE_COOLDOWN_SECONDS",
     "AI_INITIATIVE_HOURLY_CAP",
     "LOG_LEVEL",
+    "GITHUB_TOKEN",
+    "GITHUB_REPO",
+    "GITHUB_REPO_BOT",
+    "INTAKE_PUBLISH_ENABLED",
 )
 
 _FAKE_TOKEN = "NOT-A-REAL-TOKEN-" + "x" * 42
@@ -109,3 +113,18 @@ def test_config_is_frozen(monkeypatch):
     cfg = config.load()
     with pytest.raises(dataclasses.FrozenInstanceError):
         cfg.ai_enabled = False
+
+
+def test_the_two_trackers_default_to_the_two_repositories(monkeypatch):
+    """Owner, 2026-09-04: game reports to spider-swing, bot reports to
+    spider-bot. Both overridable, neither ever empty."""
+    monkeypatch.setenv("DISCORD_TOKEN", _FAKE_TOKEN)
+    cfg = config.load()
+    assert cfg.github_repo == "menno420/spider-swing"
+    assert cfg.github_repo_bot == "menno420/spider-bot"
+    assert "github_repo_bot='menno420/spider-bot'" in repr(cfg)
+    monkeypatch.setenv("GITHUB_REPO_BOT", "someone/elsewhere")
+    monkeypatch.setenv("GITHUB_REPO", "")
+    cfg = config.load()
+    assert cfg.github_repo_bot == "someone/elsewhere"
+    assert cfg.github_repo == "menno420/spider-swing"  # empty falls back, never blank

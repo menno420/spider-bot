@@ -56,6 +56,11 @@ class Config:
     # credential and nothing pretends to have published.
     github_token: str | None = None
     github_repo: str = "menno420/spider-swing"
+    #: Where a report about the BOT goes (owner, 2026-09-04). The same token
+    #: serves both repositories, so it has to be scoped to both; a token that
+    #: can only see the game repository makes every bot report fail by name
+    #: (404 — `not_found_or_no_access`) and stay in the queue, never leak.
+    github_repo_bot: str = "menno420/spider-bot"
     #: Publication is OFF until the owner turns it on, even with a token
     #: present. Two independent locks, because the first live report reaching a
     #: public tracker should be a decision rather than a side effect of setting
@@ -111,6 +116,7 @@ class Config:
             f"mod_watch_channels={self.mod_watch_channels}, "
             f"intake_publish_enabled={self.intake_publish_enabled}, "
             f"github_repo={self.github_repo!r}, "
+            f"github_repo_bot={self.github_repo_bot!r}, "
             f"discord_token=<redacted:{len(self.discord_token)}>, "
             f"anthropic_api_key={'<redacted>' if self.anthropic_api_key else None}, "
             f"github_token={'<redacted>' if self.github_token else None})"
@@ -142,6 +148,7 @@ def load() -> Config:
         log_level=_env("LOG_LEVEL", "INFO") or "INFO",
         github_token=_env("GITHUB_TOKEN"),
         github_repo=_env("GITHUB_REPO", "menno420/spider-swing") or "menno420/spider-swing",
+        github_repo_bot=_env("GITHUB_REPO_BOT", "menno420/spider-bot") or "menno420/spider-bot",
         intake_publish_enabled=_env_bool("INTAKE_PUBLISH_ENABLED", False),
         mod_mode=(_env("MOD_MODE", "off") or "off").strip().lower(),
         mod_watch_channels=_csv("MOD_WATCH_CHANNELS"),

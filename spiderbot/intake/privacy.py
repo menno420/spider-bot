@@ -32,7 +32,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from spiderbot.intake.models import CATEGORY_LABELS, Category, Report, Sensitivity
+from spiderbot.intake.models import CATEGORY_LABELS, Category, Report, Sensitivity, Target
 
 #: A raw Discord mention token. Its presence means the reporter pointed at a
 #: specific person or role, which is what makes a report interpersonal.
@@ -81,6 +81,7 @@ PUBLISHABLE_CATEGORIES: frozenset[Category] = frozenset(
         Category.IDEA,
         Category.GAMEPLAY_FEEDBACK,
         Category.TESTING_PROBLEM,
+        Category.BOT_PROBLEM,
     }
 )
 
@@ -154,9 +155,10 @@ def classify(report: Report, *, ai_says_private: bool | None = None) -> Classifi
             "the classifier judged this to be about a person rather than the game",
             ("ai judged interpersonal",),
         )
+    subject = "the bot" if report.target is Target.BOT else "the game"
     return Classification(
         Sensitivity.PUBLIC_SAFE,
-        f"{CATEGORY_LABELS[report.category].lower()} about the game, with no "
+        f"{CATEGORY_LABELS[report.category].lower()} about {subject}, with no "
         "sign of anything about a specific person",
     )
 
