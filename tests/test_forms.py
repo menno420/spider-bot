@@ -238,3 +238,39 @@ def test_every_modal_field_is_inside_discords_limits():
                     f"{len(placeholder)} characters"
                 )
         assert 0 < fields <= 5, f"{modal.__name__} has {fields} inputs (Discord allows 5)"
+
+
+def test_delivery_failure_after_the_report_is_stored_still_yields_a_receipt():
+    """Codex, spider-bot#5 round 2: a forum `create_thread` that raised AFTER
+    the report was durably stored propagated out of `on_submit`, so the
+    deferred member got no receipt and no reference, and filed it again."""
+    import asyncio
+
+    import discord
+
+    from spiderbot.ui.forms import _deliver
+
+    class Broken:
+        name = "bug-reports"
+
+        async def send(self, *a, **kw):
+            raise discord.DiscordException("Create Public Threads was removed")
+
+    class Sink:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, content, **kw):
+            self.sent.append(content)
+
+    class Bot:
+        def __init__(self, channels):
+            self.channels = channels
+
+    bot = Bot({"bug-reports": Broken(), "mod-log": Sink()})
+    receipt = asyncio.run(_deliver(bot, "bug-reports", "[Spider Bot] t", "body", "alice"))
+    assert "reached the team" in receipt
+    assert bot.channels["mod-log"].sent and "[Spider Bot] t" in bot.channels["mod-log"].sent[0]
+    bot.channels = {"bug-reports": Broken(), "mod-log": Broken()}
+    receipt = asyncio.run(_deliver(bot, "bug-reports", "t", "body", "alice"))
+    assert "saved" in receipt and "failed" in receipt

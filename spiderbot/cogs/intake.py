@@ -77,9 +77,34 @@ BOT_SUBJECT = re.compile(
 BOT_TROUBLE = re.compile(
     r"\b(does(?:n'?t| not) work|didn'?t work|isn'?t working|not working|broken|"
     r"nothing happen(?:s|ed)|no response|not respond(?:ing)?|ignores? me|"
-    r"error|failed|timed out|stuck)\b",
+    r"error|failed|timed out|stuck|crash(?:es|ed|ing)?|froze|freezes|frozen|"
+    r"hangs?|hung|glitch(?:ed|ing|es)?)\b",
     re.IGNORECASE,
 )
+#: The game, named. Inside one clause the game outranks the bot: "the bot said
+#: the game is broken" is about the game.
+GAME_SUBJECT = re.compile(
+    r"\b(the game|the app|slingy spider|the level|the bird|the silk|the web|"
+    r"the spider(?! ?bot))\b",
+    re.IGNORECASE,
+)
+#: Where one thought ends and the next begins, for the purpose above. Codex,
+#: spider-bot#5 round 2: two searches over the whole message let "I asked the
+#: bot for help because the game doesn't work anymore" read as a bot problem —
+#: the subject and the trouble were in different clauses.
+CLAUSE_BREAK = re.compile(
+    r"[.!?;\n]|\b(?:because|but|although|though|while|so that)\b", re.IGNORECASE
+)
+
+
+def _reads_as_bot_problem(text: str) -> bool:
+    """A clause that names the bot, names trouble, and does not name the game."""
+    return any(
+        BOT_SUBJECT.search(clause)
+        and BOT_TROUBLE.search(clause)
+        and not GAME_SUBJECT.search(clause)
+        for clause in CLAUSE_BREAK.split(text)
+    )
 
 SIGNALS: tuple[tuple[re.Pattern[str], Category], ...] = (
     (
@@ -142,7 +167,7 @@ def detect(text: str) -> Category | None:
     """The likely category, or None. Deterministic; no model call."""
     if len(text.strip()) < MIN_LENGTH:
         return None
-    if BOT_SUBJECT.search(text) and BOT_TROUBLE.search(text):
+    if _reads_as_bot_problem(text):
         return Category.BOT_PROBLEM
     for pattern, category in SIGNALS:
         if pattern.search(text):
@@ -428,13 +453,21 @@ def build_offer(bot, draft_id: str, category: Category, title: str, description:
     """The panel that shows what would be saved, before anything is saved."""
     from spiderbot.intake.models import CATEGORY_LABELS
 
+    # Codex, spider-bot#5 round 2: this said "the game's public issue tracker"
+    # for every category, and pressing Save it recorded consent for a
+    # destination a bot-problem reporter was never told about.
+    tracker = (
+        "Spider Bot's own public issue tracker"
+        if category is Category.BOT_PROBLEM
+        else "the game's public issue tracker"
+    )
     embed = style.embed(
         title=f"{style.SPEECH} Want me to write that down?",
         description=(
             f"I would save this as **{CATEGORY_LABELS[category]}**:\n\n"
             f"> {style.escape_name(title)}\n\n"
-            "Menno reads these, and he may put it on the game's public issue "
-            "tracker — never your name or anything private, and never until he "
+            f"Menno reads these, and he may put it on {tracker} "
+            "— never your name or anything private, and never until he "
             "presses publish himself. If I have got it wrong, press "
             "**No thanks** and use the buttons on `/home` instead."
         ),

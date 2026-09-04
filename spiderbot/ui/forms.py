@@ -83,22 +83,38 @@ def receipt_for(outcome, fallback: str) -> str:
 
 
 async def _deliver(bot, channel_key: str, title: str, body: str, author) -> str:
-    """Post a report to its forum, or fall back to #mod-log. Returns a receipt."""
+    """Post a report to its forum, or fall back to #mod-log. Returns a receipt.
+
+    Never raises. Codex, spider-bot#5 round 2: a forum `create_thread` that
+    fails (Create Public Threads removed, Discord down) propagated AFTER the
+    report was durably stored, so the member — whose interaction was already
+    deferred — got no receipt and no reference, and filed it again.
+    """
     target = bot.channels.get(channel_key)
-    if isinstance(target, discord.ForumChannel):
-        created = await target.create_thread(
-            name=title[:95], content=body[:1900], allowed_mentions=NO_MENTIONS
-        )
-        return f"Thank you! It is posted here: {created.thread.mention}"
-    if target is not None:
-        await target.send(f"**{title}**\n{body}"[:1900], allowed_mentions=NO_MENTIONS)
-        return "Thank you! Your report reached the team."
+    try:
+        if isinstance(target, discord.ForumChannel):
+            created = await target.create_thread(
+                name=title[:95], content=body[:1900], allowed_mentions=NO_MENTIONS
+            )
+            return f"Thank you! It is posted here: {created.thread.mention}"
+        if target is not None:
+            await target.send(f"**{title}**\n{body}"[:1900], allowed_mentions=NO_MENTIONS)
+            return "Thank you! Your report reached the team."
+    except discord.DiscordException as exc:
+        log.warning("delivery to #%s failed (%s); falling back to #mod-log", channel_key, exc)
     fallback = bot.channels.get("mod-log")
     if fallback is not None:
-        await fallback.send(
-            f"From {getattr(author, 'display_name', author)}: **{title}**\n{body}"[:1900],
-            allowed_mentions=NO_MENTIONS,
-        )
+        try:
+            await fallback.send(
+                f"From {getattr(author, 'display_name', author)}: **{title}**\n{body}"[:1900],
+                allowed_mentions=NO_MENTIONS,
+            )
+        except discord.DiscordException as exc:
+            log.warning("fallback delivery to #mod-log failed too (%s)", exc)
+            return (
+                "Thank you! It is saved; posting it to the team's channel failed, "
+                "so they will see it in the queue."
+            )
     return "Thank you! Your report reached the team."
 
 

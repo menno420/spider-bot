@@ -307,7 +307,15 @@ class IntakeService:
                 sensitivity=str(report.sensitivity),
             )
             return report
-        approved = report.with_(approved_by=by)
+        # A person approving is also a person deciding to try again: a
+        # permanent failure (a 404 from a tracker the token could not see,
+        # issues disabled, a 422) is cleared by their press — they read the
+        # body and fixed the cause — while the scheduled loop never clears it.
+        # Codex, spider-bot#5: `may_publish` refused a stuck report for ever,
+        # so the panel's "the reason is the fix" had no path to act on.
+        approved = report.with_(
+            approved_by=by, publish_failure_retryable=True, publish_failure=""
+        )
         await self._store.append(store.REPORTS, approved.id, approved.as_record())
         audit.stdout_event(
             "report_approved",
@@ -488,24 +496,32 @@ class IntakeService:
         slicing that meant a queue longer than the limit retried the same
         newest `limit` reports every pass while the oldest never moved.
         """
-        outcomes = []
+        outcomes: list[Outcome] = []
         queue = sorted(await self.pending_publication(), key=lambda r: r.submitted_at)
-        for report in queue:
-            if len(outcomes) >= limit:
-                break
-            if not self.client_for(report).available:
-                # Two trackers: the loop runs when EITHER is reachable, so a
-                # report whose own tracker is not must be left queued rather
-                # than attempted — an attempt writes a `publish_pending` and a
-                # `publish_failed` generation against a client that cannot
-                # become available without a redeploy, every pass, and those
-                # writes eat the store's fixed horizon (Codex, spider-bot#3,
-                # round 2 — the same hole, one tracker later). And the limit
-                # counts ATTEMPTS, not queue positions: Codex, spider-bot#5 —
-                # slicing the queue first meant ten skipped bot reports at the
-                # front starved every newer game report for ever.
-                continue
-            outcomes.append(await self.publish(report.id))
+        # One queue PER TRACKER, attempted round-robin, `limit` attempts in
+        # total. A report whose own tracker is unreachable is left queued, not
+        # attempted: an attempt writes a `publish_pending` and a
+        # `publish_failed` generation against a client that cannot become
+        # available without a redeploy, every pass, and those writes eat the
+        # store's fixed horizon (Codex, spider-bot#3 round 2 — the same hole,
+        # one tracker later). The limit counts ATTEMPTS, not queue positions
+        # (Codex, spider-bot#5 round 1: slicing first let skipped reports at
+        # the front starve every newer one), and the trackers take turns
+        # (round 2: one tracker's repeated retryable failure — the 403 the
+        # sink keeps retryable on purpose — consumed the whole pass, so the
+        # healthy tracker's newer reports were never attempted). Round-robin
+        # keeps the full limit when only one tracker has work.
+        lanes = {
+            target: [r for r in queue if r.target is target and self.client_for(r).available]
+            for target in Target
+        }
+        while len(outcomes) < limit and any(lanes.values()):
+            for target in Target:
+                if len(outcomes) >= limit:
+                    break
+                if lanes[target]:
+                    report = lanes[target].pop(0)
+                    outcomes.append(await self.publish(report.id))
         return outcomes
 
     async def stuck(self) -> list[Report]:
@@ -518,7 +534,9 @@ class IntakeService:
         return [
             r
             for r in await self.all_reports()
-            if not r.publish_failure_retryable and r.github_issue_number is None
+            if not r.publish_failure_retryable
+            and r.github_issue_number is None
+            and r.status is not Status.RESOLVED
         ]
 
     async def mark_resolved(self, report_id: str, resolution: str) -> Report | None:

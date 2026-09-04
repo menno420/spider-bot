@@ -366,12 +366,18 @@ class HomePanel(Panel):
             # that needed a person was an undifferentiated line among the
             # latest twelve, and then aged out.
             lines.append(
-                "**Stuck — a retry can never fix these; the reason is the fix**"
+                "**Stuck — a retry can never fix these; the reason is the fix.** "
+                "Fix the cause, then `/publish <id>` tries again by hand."
             )
+            oldest_first = sorted(stuck, key=lambda r: r.submitted_at)
             lines += [
                 f"· {_staff_report_line(r)} — {redact.for_discord(r.publish_failure, limit=80)}"
-                for r in stuck[:6]
+                for r in oldest_first[:12]
             ]
+            if len(oldest_first) > 12:
+                # Codex, spider-bot#5 round 2: the newest six left the rest as
+                # a bare count. Oldest first, twelve, and the remainder named.
+                lines.append(f"· … and {len(oldest_first) - 12} more, oldest shown first")
             lines.append("")
         if waiting:
             lines.append(
