@@ -18,6 +18,15 @@ a moderator or the developer would find confusing, wrong, or alarming.
 
 Every journey below is one the brief for this work names by hand.
 """
+
+# ruff: noqa: E402, E501, E701, E702, E741, B007
+#
+# This file bootstraps `sys.path` before importing `spiderbot`, so its imports
+# cannot come first (E402) - that is what makes it runnable as a standalone
+# script from a fresh checkout, which is the point of it. The remaining
+# exemptions are for a dense read-once walkthrough: the fakes are deliberately
+# compact so the JOURNEYS are what a reader's eye lands on, not the scaffolding.
+# Nothing here ships in `spiderbot/`, which is held to the full rule set.
 import asyncio
 import json
 import pathlib
@@ -229,12 +238,13 @@ async def main():
     if not feed_path.is_file():
         print("   (no local spider-swing checkout; skipping the live-feed half)")
         return
-    facts = support.parse(feed_path.read_text())
+    raw = feed_path.read_text()
+    facts = support.parse(raw)
     print("  ", facts.staleness())
     print("   build the bot now knows:", facts.build_version, "| version code", facts.android_version_code)
     stale = support.SupportFacts(source=support.Source.BUILT_IN, problem="feed returned HTTP 404")
     print("   if the feed is unreachable:", stale.staleness())
-    future = support.parse(json.dumps({**feed, "schema_version": 9}))
+    future = support.parse(json.dumps({**json.loads(raw), "schema_version": 9}))
     print("   if the feed moves ahead of the bot:", future.staleness())
 
 asyncio.run(main())
