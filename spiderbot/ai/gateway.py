@@ -72,16 +72,33 @@ class AIResult:
 
 
 class Gateway:
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg, *, knowledge_provider=None) -> None:
         self._cfg = cfg
         self._client: anthropic.AsyncAnthropic | None = None
         if cfg.ai_enabled and cfg.anthropic_api_key:
             self._client = anthropic.AsyncAnthropic(api_key=cfg.anthropic_api_key)
-        # Stable, cache-marked system block: persona -> safety -> knowledge.
-        self._system = [
+        # The game half of the system prompt is now a CALLABLE, not a constant.
+        # `spiderbot/knowledge.py` is a hand-copied block of prose from
+        # spider-swing's docs and it had already drifted — measured 2026-09-04,
+        # it claimed CLOSED ALPHA while that repo's runbook describes a closed
+        # track that has not started, and it carried no build version at all.
+        # The provider lets the live support feed supply current facts while
+        # the static block stays as the fallback, so a feed outage degrades the
+        # answer's freshness rather than the bot's availability.
+        self._knowledge = knowledge_provider or (lambda: knowledge.GAME_KNOWLEDGE)
+
+    def _system_blocks(self) -> list[dict]:
+        """Persona -> safety -> game knowledge, as one cache-marked block.
+
+        Rebuilt per call because the knowledge half can change under it. The
+        cache marker still pays: the block only actually changes when the feed
+        refreshes, which is hourly at most, so consecutive calls hit the cache
+        exactly as they did when this was a constant.
+        """
+        return [
             {
                 "type": "text",
-                "text": PERSONA + "\n" + safety.SYSTEM_SAFETY + "\n" + knowledge.GAME_KNOWLEDGE,
+                "text": PERSONA + "\n" + safety.SYSTEM_SAFETY + "\n" + self._knowledge(),
                 "cache_control": {"type": "ephemeral"},
             }
         ]
@@ -108,7 +125,7 @@ class Gateway:
                 self._client.messages.create(
                     model=self._cfg.ai_model,
                     max_tokens=self._cfg.ai_max_response_tokens,
-                    system=self._system,
+                    system=self._system_blocks(),
                     output_config={"effort": self._cfg.ai_effort},
                     messages=[{"role": "user", "content": content}],
                 ),

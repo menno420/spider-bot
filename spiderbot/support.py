@@ -77,6 +77,7 @@ class SupportFacts:
     troubleshooting: tuple[tuple[str, str], ...] = ()
     facts: tuple[tuple[str, str], ...] = ()
     feedback_wanted: tuple[str, ...] = ()
+    retention_rules: tuple[str, ...] = ()
     links: tuple[tuple[str, str], ...] = ()
     generated_at: str = ""
     source_sha: str = ""
@@ -132,6 +133,9 @@ class SupportFacts:
         if self.feedback_wanted:
             parts += ["", "What feedback is most useful right now:"]
             parts += [f"- {want}" for want in self.feedback_wanted]
+        if self.retention_rules:
+            parts += ["", "What testers agreed to (Google counts CONTINUOUS opt-in):"]
+            parts += [f"- {rule}" for rule in self.retention_rules]
         if self.links:
             parts += ["", "Official links (never invent others):"]
             parts += [f"- {label}: {url}" for label, url in self.links]
@@ -223,6 +227,7 @@ def parse(raw: str) -> SupportFacts:
         troubleshooting=_pairs(document.get("troubleshooting")),
         facts=_pairs(document.get("facts")),
         feedback_wanted=_strings(document.get("feedback_wanted")),
+        retention_rules=_strings(document.get("retention_rules")),
         links=_pairs(document.get("links")),
         generated_at=redact.one_line(str(document.get("generated_at", "")), limit=40),
         source_sha=redact.one_line(str(document.get("source_sha", "")), limit=64),

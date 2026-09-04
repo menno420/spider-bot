@@ -17,8 +17,22 @@ structural change - that plan outranks preferences you arrive with.
    before it reaches the model. New AI features wrap their inputs too.
 4. **Unconfigured = silent.** Initiative replies happen only in channels named
    in `AI_INITIATIVE_CHANNELS`. No allow-list entry, no initiative - ever.
-5. **The AI never performs side effects.** Role grants, announcements and
-   moderation run only through deterministic, permission-gated slash commands.
+5. **The AI never performs side effects — REFINED 2026-09-04, not relaxed.**
+   The AI may now supply a *judgement* that influences a moderation decision.
+   It still calls nothing. The pipeline is:
+
+       Discord event -> deterministic pre-check -> optional AI analysis
+       -> TYPED, SCHEMA-VALIDATED verdict -> deterministic policy engine
+       -> permission/risk gate -> typed operation -> Discord API
+       -> audit + case record
+
+   Free-form prose is **never** parsed into an action, and invalid or
+   incomplete model output means **no automatic action**. This is structural,
+   not remembered: `moderation/classifier.py` imports no module that mutates
+   Discord, `moderation/operations.py` imports no classifier, and
+   `tests/test_moderation_layering.py` fails the build if that ever changes.
+   Role grants and announcements are unchanged — still deterministic,
+   permission-gated commands only.
 6. **The bot never DMs members first** (server rule 4 binds the bot too).
 7. **Every AI decision leaves exactly one audit event** (stdout JSON; replies,
    degrades and tester actions also go to #mod-log as embeds).
@@ -69,7 +83,37 @@ structural change - that plan outranks preferences you arrive with.
     replied_user=False` explicitly rather than inheriting narrowness from
     another file.
 
-21. **The tester role is never granted by code.** Not by the AI, not by a
+21. **Shadow mode is a TYPE, not a flag.** `ShadowExecutor` declares no
+    `__init__`, holds no instance state and no Discord handle, so there is
+    no code path from a shadow decision to a mutation to forget to guard. Never
+    replace it with a boolean checked before each side effect: that is the
+    design that fails when someone adds a seventh action and forgets the
+    seventh check. `executor_for` returns shadow for anything that is not
+    exactly `"enforce"`, so a misspelled mode does nothing rather than acting.
+
+22. **No policy rule may produce a kick or a ban.** They are reachable only
+    through the staff path (`/modact`), where a human is the actor of record.
+    `policy.validate()` fails the table if a rule ever produces one without
+    human confirmation. Do not "temporarily" add one to test something.
+
+23. **A report is durable before anything is published.** GitHub is a sink, not
+    the record: store first, then classify, then publish. A failed durable
+    write is reported to the person as a failure — never thanked for.
+    `Sensitivity.UNCLASSIFIED` is the initial value and is NOT publishable, so
+    a report nothing classified cannot leak. The AI may only make a report
+    **more** private, never less.
+
+24. **The scanned set is the published set.** Every field `Report.public_body()`
+    publishes must be read by `privacy.classify`. Adding one to the body
+    without adding it to the classifier is how contact details typed into the
+    device box get published.
+
+25. **`spider-swing` owns the game; this bot consumes.** Game facts come from
+    the versioned support feed with a pinned schema, a last-known-good fallback
+    and an honest staleness line that is never omitted. Never hand-copy game
+    prose into this repo again — that is what drifted.
+
+26. **The tester role is never granted by code.** Not by the AI, not by a
     listener, not on rejoin. It mirrors who is actually opted in on Google
     Play, which only a human can confirm; code that grants it inflates the one
     number the project is ranked against. `cogs/membership.py` restores every
@@ -79,7 +123,7 @@ structural change - that plan outranks preferences you arrive with.
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must
 all pass (CI job `quality` runs exactly these on every push; informational,
-not a gate). Live check: run locally with the token from the owner's env
+not a gate). Read the real exit code, never `$?` after a pipe. Live check: run locally with the token from the owner's env
 (`DISCORD_BOT_TOKEN_SPIDERBOT`) and check the `ready` audit line lists the
 five resolved channels - but never leave a local instance running while the
 Railway worker is up: that is two live bots answering in the real server.

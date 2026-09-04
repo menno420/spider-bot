@@ -44,7 +44,12 @@ class SpiderBot(commands.Bot):
             allowed_mentions=discord.AllowedMentions.none(),
         )
         self.cfg = cfg
-        self.ai = Gateway(cfg)
+        self.support = support.SupportFeed(cfg)
+        # The gateway asks the feed for the game half of its system prompt on
+        # every call. `current` never blocks and never returns None — it is
+        # whatever was last fetched, or the built-in block — so an unreachable
+        # feed costs freshness, never availability.
+        self.ai = Gateway(cfg, knowledge_provider=self._game_knowledge)
         self.channels: dict[str, discord.abc.GuildChannel] = {}
         # Built in on_ready, once the state channels are resolved. Until then
         # every one of these is None and every surface that uses one says so
@@ -52,7 +57,17 @@ class SpiderBot(commands.Bot):
         # feature that cannot store anything must not pretend it can.
         self.intake: IntakeService | None = None
         self.moderation: ModerationService | None = None
-        self.support = support.SupportFeed(cfg)
+
+    def _game_knowledge(self) -> str:
+        """The game facts, plus one honest line about where they came from.
+
+        The staleness line is NOT optional and is never omitted: a model told
+        the build version without being told how fresh it is will state it with
+        the same confidence either way, and "the bot knows the current game
+        rather than an old copy of it" is the whole point of the feed.
+        """
+        facts = self.support.current
+        return facts.as_prompt_block() + "\n\nProvenance: " + facts.staleness()
 
     async def setup_hook(self) -> None:
         problems = routes.validate()
@@ -106,6 +121,7 @@ class SpiderBot(commands.Bot):
         if missing:
             log.warning("channels not found (features degrade): %s", ", ".join(sorted(missing)))
         self._build_services()
+        await self.support.refresh()
         audit.stdout_event(
             "ready",
             user=str(self.user),
@@ -117,6 +133,7 @@ class SpiderBot(commands.Bot):
             github=bool(self.cfg.github_token) and self.cfg.intake_publish_enabled,
             moderation=self.cfg.mod_mode,
             moderation_channels=list(self.cfg.mod_watch_channels),
+            support_feed=self.support.current.source,
         )
         log.info(
             "ready as %s in %s; AI=%s intake=%s moderation=%s",
