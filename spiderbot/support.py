@@ -92,9 +92,17 @@ class SupportFacts:
     def staleness(self) -> str:
         """One honest line about where these facts came from. Never omitted."""
         if self.source == Source.FEED:
-            stamp = f" (generated {self.generated_at}" if self.generated_at else ""
-            sha = f", spider-swing {self.source_sha[:8]}" if self.source_sha else ""
-            return f"Current game facts from the support feed{stamp}{sha})".replace("((", "(")
+            # Built from the parts that are actually present rather than by
+            # string-patching a template: the first version closed a bracket it
+            # had not always opened, and printed
+            # "...from the support feed, spider-swing 0675ee01)".
+            parts = []
+            if self.generated_at:
+                parts.append(f"generated {self.generated_at}")
+            if self.source_sha:
+                parts.append(f"spider-swing {self.source_sha[:8]}")
+            detail = f" ({', '.join(parts)})" if parts else ""
+            return f"Current game facts from the support feed{detail}"
         if self.source == Source.CACHED:
             return (
                 "Using the last support feed I could read — the live one is "

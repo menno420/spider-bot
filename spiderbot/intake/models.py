@@ -264,7 +264,13 @@ class Report:
                 # GitHub while leaving `#123` live as a cross-reference. Re-
                 # escaping is the only way this body can promise anything
                 # about text it did not render itself.
-                *[f"- {gh(line, limit=400)}" for line in self.evidence_summary],
+                # The middot prefix belongs to the Discord rendering these
+                # lines were produced for; a markdown list already has its own
+                # bullet, and "- · Build ..." reads as a mistake.
+                *[
+                    f"- {gh(line.lstrip('· ').strip(), limit=400)}"
+                    for line in self.evidence_summary
+                ],
             ]
         if self.ai_summary:
             lines += [

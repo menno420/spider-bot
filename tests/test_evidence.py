@@ -316,3 +316,43 @@ def test_nothing_in_a_hostile_file_makes_the_parser_raise():
         export([dict(GOOD_RECORD, resolved_upgrade_levels={"a": {"b": {"c": 1}}})]),
     ):
         assert evidence.parse(blob) is not None
+
+
+def test_the_provenance_line_is_never_malformed():
+    """It is user-visible and it goes into the model's system prompt. The first
+    version string-patched a template and closed a bracket it had not opened."""
+    from spiderbot import support
+
+    for facts in (
+        support.SupportFacts(source=support.Source.FEED),
+        support.SupportFacts(source=support.Source.FEED, source_sha="abcdef123456"),
+        support.SupportFacts(source=support.Source.FEED, generated_at="2026-09-04T12:00:00Z"),
+        support.SupportFacts(
+            source=support.Source.FEED, generated_at="2026-09-04T12:00:00Z", source_sha="abc123"
+        ),
+        support.SupportFacts(source=support.Source.CACHED, problem="HTTP 500"),
+        support.SupportFacts(source=support.Source.BUILT_IN, problem="no feed"),
+    ):
+        line = facts.staleness()
+        assert line.count("(") == line.count(")"), line
+        assert "((" not in line and " )" not in line, line
+        assert line and line[0].isupper()
+
+
+def test_evidence_lines_do_not_double_their_bullet_in_an_issue_body():
+    """The summary is rendered for Discord with a middot prefix; a markdown list
+    already has a bullet, and "- · Build ..." reads as a mistake."""
+    from spiderbot.intake.models import Category, Report, Sensitivity
+
+    body = Report(
+        id="SB-R-1",
+        category=Category.BUG,
+        title="t",
+        description="d",
+        submitted_at=0.0,
+        sensitivity=Sensitivity.PUBLIC_SAFE,
+        sensitivity_reason="checked",
+        evidence_summary=("**Latest run** - 5,123 m", "· Build 0.45.0"),
+    ).public_body()
+    assert "- · Build" not in body
+    assert "- Build 0.45.0" in body
