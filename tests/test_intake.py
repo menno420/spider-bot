@@ -417,6 +417,25 @@ def test_a_bot_report_with_no_bot_tracker_is_refused_by_name_and_never_sent_to_t
     assert svc.can_publish
 
 
+def test_the_retry_loop_leaves_a_report_alone_when_its_own_tracker_is_unreachable():
+    """The loop runs when EITHER tracker is reachable. A bot report with no bot
+    tracker must be skipped, not attempted: an attempt writes two store
+    generations per pass against a client that cannot change without a
+    redeploy — the hole Codex round 2 closed for one tracker, reopened for two."""
+    game = FakeGitHub()
+    svc = intake_service.IntakeService(store.InMemoryStore(), game)
+    about_bot = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="t", description="the panel did nothing",
+    )
+    about_game = file_and_approve(svc, category=Category.BUG, title="g", description="froze")
+    before = run(svc.get(about_bot.report.id))
+    outcomes = run(svc.retry_pending())
+    assert [o.report.id for o in outcomes] == [about_game.report.id]
+    assert run(svc.get(about_bot.report.id)) == before  # no generation written
+    assert run(svc.get(about_bot.report.id)).status is not Status.PUBLISH_FAILED
+    assert game.created and game.created[0][0] == "[Bug] g"
+
+
 def test_repo_for_names_the_tracker_the_human_is_about_to_publish_to():
     game = github_sink.HttpGitHubClient("t", "menno420/spider-swing")
     bot = github_sink.HttpGitHubClient("t", "menno420/spider-bot")

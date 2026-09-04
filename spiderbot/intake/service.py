@@ -484,6 +484,15 @@ class IntakeService:
         outcomes = []
         queue = sorted(await self.pending_publication(), key=lambda r: r.submitted_at)
         for report in queue[:limit]:
+            if not self.client_for(report).available:
+                # Two trackers: the loop runs when EITHER is reachable, so a
+                # report whose own tracker is not must be left queued rather
+                # than attempted — an attempt writes a `publish_pending` and a
+                # `publish_failed` generation against a client that cannot
+                # become available without a redeploy, every pass, and those
+                # writes eat the store's fixed horizon (Codex, spider-bot#3,
+                # round 2 — the same hole, one tracker later).
+                continue
             outcomes.append(await self.publish(report.id))
         return outcomes
 
