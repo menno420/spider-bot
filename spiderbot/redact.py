@@ -22,6 +22,27 @@ text still reads correctly to a human and no longer resolves.
 **Log lines and audit records.** Newlines are what let one field forge another,
 so anything going into a single-line context gets them folded.
 
+**The zero-width space is not a stylistic choice — backslash-escaping does not
+work.** `MEASURED` 2026-09-04 against GitHub's own stateless renderer
+(`POST /markdown`, `mode=gfm`, `context=menno420/spider-swing`, which creates
+nothing and notifies nobody), ten cases with four positive controls:
+
+| input | user-mention | issue-link | code block |
+|---|---|---|---|
+| `@menno420` (control) | **live** | - | - |
+| `#2` (control) | - | **live** | - |
+| `menno420/fleet-manager#1` (control) | - | **live** | - |
+| a bare fence (control) | - | - | **opens one** |
+| a backslash before the at-sign | **still live** | - | - |
+| a backslash before the hash | - | **still live** | - |
+| `for_github("@menno420")` | inert | - | - |
+| `for_github("#2")` | - | inert | - |
+| `for_github("menno420/fleet-manager#1")` | - | inert | - |
+| `for_github(fence)` | - | - | inert |
+
+So the obvious mitigation is the one that silently fails, and this module's
+would have been untested had the controls not been run first.
+
 Nothing here is a security boundary against a *determined* attacker rendering
 their own markdown — it is a boundary against member text acquiring authority it
 was never given. The privacy decision about whether text may be published at all
