@@ -51,8 +51,9 @@ from spiderbot.moderation.classifier import Classifier
 def H(t): print("\n" + "="*78 + "\n  " + t + "\n" + "="*78)
 
 class FakeGW:
-    def __init__(self, text): self.text, self.enabled = text, True
-    async def reply(self, payload, *, mode, timeout_s=45.0):
+    def __init__(self, text): self.text, self.enabled, self.system = text, True, None
+    async def reply(self, payload, *, mode, system=None, timeout_s=45.0):
+        self.system, self.mode, self.payload = system, mode, payload
         return AIResult(self.text, "ok", "test-model", 120, 30)
 
 class FakeGH:
@@ -217,6 +218,11 @@ async def main():
       ("model returns prose", "you are worthless and everyone knows it", "I think you should ban them."),
       ("model invents a quote", "the reel feels weak on this build",
        verdict(evidence_quote="I will find where you live")),
+      ("hostile-sounding, but the model says it is aimed at NO ONE",
+       "this whole level is garbage and whoever built it should be ashamed",
+       verdict(category="targeted_hostility", severity=3, confidence=0.95,
+               evidence_quote="whoever built it should be ashamed",
+               targets_member=False, reason="blunt, but aimed at the design")),
     ]
     for label, content, model_out in cases:
         s = msvc.ModerationService(mode="shadow", classifier=Classifier(FakeGW(model_out)),
@@ -228,6 +234,10 @@ async def main():
         print(f"    -> operation={case.operation} performed={case.performed} status={case.status}")
         print(f"       rejection={case.verdict_rejection or '-'} | member touched: {bool(m.author.timeouts)}")
         print(f"       staff line: {case.summary_line()}")
+        gw = s._classifier._gateway
+        print(f"       asked as: mode={gw.mode} | judgement rules sent: "
+              f"{'QUOTING or REPORTING abuse' in (gw.system or '')} | "
+              f"author named in payload: {'written by the member' in gw.payload}")
 
     H("JOURNEY 7 — the same messages in ENFORCE mode")
     for label, content, model_out in cases[:2]:

@@ -27,6 +27,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from spiderbot.moderation import gate
+
 #: Rules Discord's own AutoMod handles better than this bot could. Shown in
 #: the mod console as "turn these on", never created automatically.
 AUTOMOD_RECOMMENDATIONS: tuple[tuple[str, str], ...] = (
@@ -108,13 +110,11 @@ def should_analyse(
     if len(content) < MIN_LENGTH and not _LINK.search(content):
         return Precheck.skip("too short to judge")
 
-    if staff_exempt:
-        perms = getattr(author, "guild_permissions", None)
-        if perms is not None and (
-            getattr(perms, "manage_guild", False)
-            or getattr(perms, "administrator", False)
-            or getattr(perms, "moderate_members", False)
-        ):
-            return Precheck.skip("author is staff")
+    if staff_exempt and gate.is_staff(author):
+        # One definition, in gate.py. When these two disagree the disagreement
+        # is invisible: the precheck decides whether a message is judged at
+        # all, the gate decides whether the resulting action may land, and a
+        # member in the gap is analysed and actable.
+        return Precheck.skip("author is staff")
 
     return Precheck(True)

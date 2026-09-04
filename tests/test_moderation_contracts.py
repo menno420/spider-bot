@@ -54,6 +54,11 @@ def a_verdict(**overrides) -> Verdict:
         recommended_operation=Operation.BAN,
         human_review_required=False,
         model="test-model",
+        # Harassment at high severity is person-directed by construction, and
+        # the acting rules require the model to have said so. Left implicit,
+        # every ceiling and threshold test below would silently be testing the
+        # targeting fall-through instead of what it was written for.
+        targets_member=True,
     )
     base.update(overrides)
     return Verdict(**base)
@@ -352,3 +357,116 @@ def test_every_mutating_operation_counts_as_acting():
             operation=operation, requires_human=False, rule_index=0, rationale="r"
         )
         assert decision.acts
+
+
+# -- what an adversarial review executed against the committed code -----------
+
+
+def test_a_one_character_quote_cannot_clear_the_floor_by_expanding():
+    """`MEASURED` 2026-09-04: the floor ran on the NFKC-normalised quote only,
+    and exactly two characters in Unicode expand past eight characters under
+    NFKC. U+FDFA is one of them, so a single character was accepted as
+    evidence."""
+    content = f"the reel button feels {chr(0xFDFA)} a bit weak honestly"
+    result = parse_verdict(response(evidence_quote=chr(0xFDFA)), content=content, model="m")
+    assert not result.ok and result.rejection is Rejection.QUOTE_TOO_SHORT
+
+
+def test_invisible_characters_are_folded_out_of_the_containment_check():
+    """A member sprinkling zero-width spaces through a sentence would otherwise
+    have every honest verdict discarded as "not in content"."""
+    content = "you are​ absolutely​ worthless and everyone here knows it"
+    assert parse_verdict(
+        response(evidence_quote="you are absolutely worthless"), content=content, model="m"
+    ).ok
+    # And the other direction: an invisible character inside a word of the
+    # QUOTE. (Inside a space it would not match, and should not: folding an
+    # invisible character out cannot conjure the space it replaced.)
+    assert parse_verdict(
+        response(evidence_quote="you are absolute​ly worthless"),
+        content=CONTENT,
+        model="m",
+    ).ok
+
+
+def test_folding_invisible_characters_does_not_make_the_check_fuzzy():
+    """Positive control for the two above. Removing characters neither side can
+    see must not let a quote the member never wrote through."""
+    result = parse_verdict(
+        response(evidence_quote="you should be permanently banned"),
+        content=CONTENT,
+        model="m",
+    )
+    assert not result.ok and result.rejection is Rejection.QUOTE_NOT_IN_CONTENT
+
+
+# -- targets_member: asked for, parsed, and now actually read -----------------
+
+
+def test_a_verdict_that_says_it_is_not_aimed_at_anyone_does_not_act():
+    """`MEASURED` 2026-09-04: `targets_member` was parsed, stored and read by
+    nothing, so a verdict explicitly saying "general frustration, not aimed at
+    a person" still fired the timeout rule whose own note says "aimed at
+    someone"."""
+    # Ceiling raised past the shipping default, so the assertion below is
+    # about targeting rather than about the clamp that would hide it.
+    lenient = P.Policy(ceiling=Operation.TIMEOUT_LONG)
+    decision = lenient.decide(
+        a_verdict(category=Category.TARGETED_HOSTILITY, targets_member=False)
+    )
+    assert decision.operation is Operation.FLAG_FOR_REVIEW
+    assert decision.requires_human
+    assert decision.clamped_from is None, "it fell through the rule, it was not clamped"
+    # Positive control: the identical verdict aimed at a person does act.
+    aimed = lenient.decide(
+        a_verdict(category=Category.TARGETED_HOSTILITY, targets_member=True)
+    )
+    assert aimed.operation is Operation.TIMEOUT_SHORT
+
+
+def test_every_acting_rule_about_conduct_toward_people_requires_targeting():
+    """The property, not the row numbers: any default rule that mutates
+    something a member experiences and is about person-directed categories must
+    require the model to say it was aimed at a person."""
+    from spiderbot.moderation.contracts import MUTATING_OPERATIONS
+
+    person_directed = {
+        Category.HARASSMENT,
+        Category.TARGETED_HOSTILITY,
+        Category.PERSONAL_ATTACK,
+        Category.HATE,
+        Category.SEXUAL_HARASSMENT,
+    }
+    checked = 0
+    for rule in P.DEFAULT_POLICY:
+        if rule.operation in MUTATING_OPERATIONS and rule.categories <= person_directed:
+            if not rule.categories:
+                continue
+            checked += 1
+            assert rule.requires_targeting, f"{rule.operation} acts on an untargeted verdict"
+    assert checked >= 3, "the loop above must actually be examining rules"
+
+
+def test_a_targeting_rule_cannot_shadow_a_general_one():
+    """The validator's shadow check had to learn about the new field, or it
+    would report a correct table as broken."""
+    narrow = P.PolicyRule(
+        operation=Operation.WARN,
+        min_severity=Severity.MEDIUM,
+        min_confidence=0.5,
+        requires_targeting=True,
+    )
+    broad = P.PolicyRule(
+        operation=Operation.FLAG_FOR_REVIEW,
+        min_severity=Severity.MEDIUM,
+        min_confidence=0.5,
+    )
+    assert not P._shadows(narrow, broad)
+    # Positive control: without the targeting difference it DOES shadow.
+    assert P._shadows(
+        P.PolicyRule(
+            operation=Operation.WARN, min_severity=Severity.MEDIUM, min_confidence=0.5
+        ),
+        broad,
+    )
+    assert P.validate(P.DEFAULT_POLICY) == []

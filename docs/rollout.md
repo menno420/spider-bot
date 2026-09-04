@@ -145,9 +145,15 @@ Six things, each one exact and none of which a session can do:
 - **Should tester ideas reach `spider-swing`'s tracker at all?** It holds one
   real issue today against 179 pull requests. A stream of bot-filed ideas
   changes the character of that tracker, and that is a product judgement.
-- **Who counts as staff?** The gate and the panel both read `manage_guild`. If
-  he uses a named Moderator role without that permission, those moderators are
-  currently moderatable by the bot and cannot open the review queue.
+- **Who counts as staff?** The moderation gate and the precheck now read one
+  shared set — `gate.STAFF_PERMISSIONS`: administrator, manage_guild,
+  moderate_members, ban_members, kick_members, manage_messages, manage_roles —
+  so anyone the owner trusted with a moderation permission is neither judged
+  nor actable. The **panel** still reads `manage_guild` alone, so a moderator
+  with only `moderate_members` is protected from the bot but cannot open the
+  review queue. That half is still his call: a named Moderator role holding no
+  listed permission would be moderatable, and the fix is a role check the bot
+  cannot invent for him.
 - **May the bot ping a third time** — "your report was fixed"? It assumes
   **no** and uses a pull surface (*My reports*) instead, because invariants 8
   and 20 name exactly two deliberate pings.

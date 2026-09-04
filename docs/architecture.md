@@ -52,7 +52,7 @@ Discord event
   → cases + audit                  one case per decision, correlation id throughout
 ```
 
-### Five properties, and why each is structural rather than remembered
+### Six properties, and why each is structural rather than remembered
 
 **1 · The model cannot reach a mutation.** `classifier.py` imports `contracts`
 and the gateway. `operations.py` imports `discord`. Neither imports the other,
@@ -67,10 +67,22 @@ fallthrough at the bottom where an edit could slip past it.
 
 **3 · The evidence quote is the anti-hallucination check.** The model must
 return the span it judged, verbatim, and it is tested against the exact content
-the model was shown. A verdict quoting something the member never wrote is
-discarded — which catches an invented message, the wrong message, and an
-injected instruction persuading the model to "quote" something. It is the only
-defence here that does not depend on the model cooperating.
+the model was shown — `safety.sanitise(content)`, not the raw message, which
+until 2026-09-04 it was not: one control character inside a phrase made every
+honest verdict fail containment. A verdict quoting something the member never
+wrote is discarded — which catches an invented message, the wrong message, and
+an injected instruction persuading the model to "quote" something. It is the
+only defence here that does not depend on the model cooperating.
+
+**What it does not establish.** Containment proves the model read the message
+it was handed. It says nothing about *who wrote the words*. A member pasting
+what was said to them contains the abuse verbatim, so the check passes by
+construction and the reporter becomes the subject — the false positive this
+server would notice first. Three things separate quoting from committing, and
+none of them is structural: the judgement rules in `classifier.SYSTEM` (which
+name this case explicitly), the author's name in the payload so the model knows
+whose conduct is in question, and `targets_member` gating every acting rule so
+an untargeted verdict falls through to a human.
 
 **4 · Kick and ban are unreachable from the automatic path.** They appear in no
 default policy rule, so no combination of category, severity and confidence
@@ -78,7 +90,17 @@ produces one. Stronger than a guard clause: there is nothing to bypass. A
 moderator can still kick or ban — through `/modact`, as a human action with a
 human actor recorded on the case.
 
-**5 · Shadow is a type, not a flag.** `ShadowExecutor` declares no `__init__`,
+**5 · The model is asked the moderation question, with the moderation prompt.**
+`Classifier.analyse` passes `system=SYSTEM` and `mode="moderation"`, and
+`Gateway.reply` refuses a mode it does not know rather than taking another
+one's branch. This is a property because of how it failed: the classifier read
+correctly, the prompt was well written, the tests passed, and none of it
+reached the model for the life of the module — `reply` dispatched on
+`mode == "mention"` and sent everything else down the initiative path.
+`tests/test_moderation_pipeline.py` now asserts the judgement rules and the
+author label are present in the actual API call.
+
+**6 · Shadow is a type, not a flag.** `ShadowExecutor` declares no `__init__`,
 holds no instance state, and its module holds no Discord handle. There is no `if enforcing:`
 in `operations.py` because there is nothing for such a branch to guard.
 `executor_for` returns shadow for anything that is not exactly `"enforce"`, so

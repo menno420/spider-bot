@@ -19,6 +19,16 @@ analysed is discarded — which catches a model that invented a message, judged
 the wrong message, or was talked by an injected instruction into "quoting"
 something the member never wrote. It costs one substring test and it is the
 only structural check that can tell a real reading from a plausible one.
+
+**What it does not do, stated because the paragraph above used to imply it
+did:** containment establishes that the model read the message it was handed.
+It establishes nothing about *who wrote the words*. The most common false
+positive in a playtest server is a member pasting what was said to them so a
+moderator can see it — and such a message contains the abuse verbatim, so this
+check passes by construction and the reporter becomes the subject. Separating
+quoting from committing is a judgement, made by the model against
+`classifier.SYSTEM`, narrowed by `targets_member` in the policy table, and
+caught by a human at `flag_for_review`. No substring test can do it.
 """
 
 from __future__ import annotations
@@ -199,6 +209,13 @@ class ParseResult:
 
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 _WHITESPACE = re.compile(r"\s+")
+#: Characters that render as nothing. Removed from BOTH sides of the
+#: containment check, because a member who sprinkles them through a sentence
+#: would otherwise have every honest verdict discarded: the model quotes the
+#: phrase it read, the raw message has an invisible character inside it, and
+#: the substring test fails. Folding them away on both sides cannot let a
+#: hallucinated quote through — it only removes characters neither side can see.
+_INVISIBLE = re.compile(r"[\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]")
 
 
 def _normalise(text: str) -> str:
@@ -206,12 +223,19 @@ def _normalise(text: str) -> str:
 
     NFKC because a model echoing a fullwidth or ligature character back as its
     ASCII form is quoting faithfully; casefold because capitalisation is not
-    evidence; whitespace collapse because a model re-wraps. Nothing here weakens
-    the check into "roughly similar" — the quote must still be a contiguous run
-    of the member's actual words.
+    evidence; whitespace collapse because a model re-wraps; invisible-character
+    strip because they are an evasion primitive and not evidence either way.
+    Nothing here weakens the check into "roughly similar" — the quote must
+    still be a contiguous run of the member's actual words.
+
+    **One known looseness, accepted rather than hidden:** whitespace collapse
+    folds a newline to a space, so a quote may span two of the member's lines.
+    That is the price of tolerating a model that re-wraps, and the alternative
+    (collapse spaces and tabs only) discards honest quotes from any message
+    long enough for the model to re-flow.
     """
-    folded = unicodedata.normalize("NFKC", text).casefold()
-    return _WHITESPACE.sub(" ", folded).strip()
+    folded = unicodedata.normalize("NFKC", _INVISIBLE.sub("", text)).casefold()
+    return _WHITESPACE.sub(" ", _INVISIBLE.sub("", folded)).strip()
 
 
 def _extract_json(raw: str) -> str:
@@ -299,8 +323,14 @@ def parse_verdict(raw: str | None, *, content: str, model: str) -> ParseResult:
             return ParseResult(rejection=Rejection.QUOTE_MISSING)
         normalised_quote = _normalise(quote)
         normalised_content = _normalise(content)
-        if len(normalised_quote) < MIN_QUOTE_CHARS and normalised_quote != normalised_content:
-            # Too short to be evidence, and not the whole message either.
+        if (
+            len(quote.strip()) < MIN_QUOTE_CHARS
+            or len(normalised_quote) < MIN_QUOTE_CHARS
+        ) and normalised_quote != normalised_content:
+            # Too short to be evidence, and not the whole message either. BOTH
+            # lengths, because NFKC expands: `MEASURED` 2026-09-04, U+FDFA
+            # normalises to 18 characters, so a one-character evidence quote
+            # cleared an 8-character floor applied only to the normalised form.
             return ParseResult(rejection=Rejection.QUOTE_TOO_SHORT, detail=quote[:40])
         if normalised_quote not in normalised_content:
             # The check that catches an invented message, the wrong message, or

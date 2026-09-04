@@ -70,17 +70,38 @@ def _top_role_position(member) -> int:
     return max((getattr(r, "position", 0) for r in roles), default=0)
 
 
-def _is_staff(member) -> bool:
+#: What counts as staff, defined ONCE and imported by `prechecks`. Two lists
+#: were maintained separately until 2026-09-04 and had drifted: the precheck
+#: exempted three permissions, the gate protected four, so a helper whose only
+#: elevated permission was `kick_members` or `manage_messages` was analysed AND
+#: actable — measured end-to-end, that helper could be timed out by the bot
+#: while a `ban_members` helper was protected. The set is the wider reading on
+#: purpose: an automoderator acting against anyone the owner trusted with a
+#: moderation permission is the failure this check exists to prevent, and the
+#: cost of being too wide is only that a staff message is not judged.
+STAFF_PERMISSIONS: tuple[str, ...] = (
+    "administrator",
+    "manage_guild",
+    "moderate_members",
+    "ban_members",
+    "kick_members",
+    "manage_messages",
+    "manage_roles",
+)
+
+
+def is_staff(member) -> bool:
+    """True when this member holds any moderation-shaped permission.
+
+    A member object with no `guild_permissions` at all (a `discord.User`
+    rather than a `Member`, or a partial from a raw event) is NOT staff — it
+    is an unknown, and the gate's other checks still apply to it.
+    """
     perms = getattr(member, "guild_permissions", None)
-    return bool(
-        perms is not None
-        and (
-            getattr(perms, "manage_guild", False)
-            or getattr(perms, "administrator", False)
-            or getattr(perms, "moderate_members", False)
-            or getattr(perms, "ban_members", False)
-        )
-    )
+    if perms is None:
+        return False
+    return any(getattr(perms, name, False) for name in STAFF_PERMISSIONS)
+
 
 
 def check(operation: Operation, *, guild, subject, me=None) -> GateResult:
@@ -107,7 +128,7 @@ def check(operation: Operation, *, guild, subject, me=None) -> GateResult:
     owner_id = getattr(guild, "owner_id", None)
     if owner_id is not None and getattr(subject, "id", None) == owner_id:
         return GateResult.deny("the subject is the server owner")
-    if _is_staff(subject):
+    if is_staff(subject):
         return GateResult.deny(
             "the subject is a moderator; an automoderator never acts against staff"
         )

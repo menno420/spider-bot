@@ -68,10 +68,20 @@ class PolicyRule:
     min_confidence: float
     categories: frozenset[Category] = ANY_CATEGORY
     requires_human: bool = False
+    #: The rule only fires on a verdict the model marked as aimed at a specific
+    #: person. `MEASURED` 2026-09-04: `targets_member` was asked for in the
+    #: schema, parsed, stored on the verdict and read by nothing, so a verdict
+    #: explicitly saying "this is general frustration, not aimed at anyone"
+    #: still fired the timeout rule whose own note reads "aimed at someone".
+    #: A rule that does not fire falls through to `flag_for_review`, so setting
+    #: this narrows what acts automatically and widens what a human sees.
+    requires_targeting: bool = False
     note: str = ""
 
     def matches(self, verdict: Verdict) -> bool:
         if self.categories and verdict.category not in self.categories:
+            return False
+        if self.requires_targeting and not verdict.targets_member:
             return False
         return (
             verdict.severity >= self.min_severity
@@ -86,7 +96,9 @@ class PolicyRule:
         )
         return (
             f"{who} at severity >= {self.min_severity.name.lower()} "
-            f"and confidence >= {self.min_confidence:.2f} -> {self.operation}"
+            f"and confidence >= {self.min_confidence:.2f}"
+            + (", aimed at a member" if self.requires_targeting else "")
+            + f" -> {self.operation}"
             + (" (human confirms)" if self.requires_human else "")
         )
 
@@ -100,6 +112,7 @@ DEFAULT_POLICY: tuple[PolicyRule, ...] = (
         min_severity=Severity.SEVERE,
         min_confidence=0.90,
         categories=frozenset({Category.HATE, Category.SEXUAL_HARASSMENT}),
+        requires_targeting=True,
         note="Severe and near-certain hate or sexual harassment: stop it now, "
         "then a human reviews the case.",
     ),
@@ -115,6 +128,7 @@ DEFAULT_POLICY: tuple[PolicyRule, ...] = (
                 Category.SEXUAL_HARASSMENT,
             }
         ),
+        requires_targeting=True,
         note="Sustained conduct aimed at someone, at high confidence.",
     ),
     PolicyRule(
@@ -138,7 +152,10 @@ DEFAULT_POLICY: tuple[PolicyRule, ...] = (
                 Category.SEXUAL_HARASSMENT,
             }
         ),
-        note="Say something, change nothing else.",
+        requires_targeting=True,
+        note="Say something, change nothing else. Every category here is "
+        "conduct toward a person, so a verdict that says the conduct was not "
+        "aimed at anyone falls through to a human instead.",
     ),
     PolicyRule(
         operation=Operation.FLAG_FOR_REVIEW,
@@ -335,15 +352,19 @@ def validate(rules: tuple[PolicyRule, ...] = DEFAULT_POLICY) -> list[str]:
 def _shadows(earlier: PolicyRule, later: PolicyRule) -> bool:
     """True when every verdict matching `later` already matched `earlier`.
 
-    Exact, not heuristic. All three conditions must hold: the earlier rule
-    covers at least the later one's categories (an empty set means every
-    category), and both of its thresholds are no higher.
+    Exact, not heuristic. Every condition must hold: the earlier rule covers at
+    least the later one's categories (an empty set means every category), both
+    of its thresholds are no higher, and it is not narrower on targeting — an
+    earlier rule that only fires on targeted conduct cannot shadow a later one
+    that fires on anything.
     """
     covers_categories = not earlier.categories or later.categories <= earlier.categories
     if later.categories == ANY_CATEGORY and earlier.categories != ANY_CATEGORY:
         covers_categories = False
+    covers_targeting = later.requires_targeting or not earlier.requires_targeting
     return (
         covers_categories
+        and covers_targeting
         and earlier.min_severity <= later.min_severity
         and earlier.min_confidence <= later.min_confidence
     )

@@ -26,6 +26,7 @@ import logging
 import time
 
 from spiderbot import audit, ids, store
+from spiderbot.ai import safety
 from spiderbot.moderation import gate as gate_module
 from spiderbot.moderation import operations, prechecks
 from spiderbot.moderation.cases import Case, CaseStatus, Mode, ReviewOutcome, Source
@@ -97,10 +98,19 @@ class ModerationService:
         content = message.content or ""
         channel_name = getattr(message.channel, "name", "") or ""
 
-        analysis = await self._classifier.analyse(content, channel_name=channel_name)
+        author = message.author
+        # `speaker_label` rejects a display name carrying newlines, brackets or
+        # a reserved role word and falls back to the pseudonym, so a member
+        # cannot smuggle an instruction into the payload through their nickname.
+        analysis = await self._classifier.analyse(
+            content,
+            author_label=safety.speaker_label(
+                getattr(author, "display_name", "") or "", "a member"
+            ),
+            channel_name=channel_name,
+        )
         decision = self._policy.decide(analysis.verdict)
 
-        author = message.author
         case = Case(
             id=ids.case_id(),
             created_at=self._now(),

@@ -24,18 +24,32 @@ _NAME_RESERVED = frozenset(
 )
 
 
-def wrap_untrusted(text: str, *, kind: str) -> str:
-    """Wrap user-originated text in kinded untrusted-data markers.
+def sanitise(text: str) -> str:
+    """The disarm steps, without the wrapper: exactly what the model will see.
 
-    Disarm steps (order matters, from the donor implementation):
-    control-char strip -> marker forgery disarm -> wrap.
+    Split out of `wrap_untrusted` so a caller that needs to compare model
+    output against the member's message can compare against the string the
+    model was actually shown. `MEASURED` 2026-09-04: the moderation classifier
+    checked its evidence quote against the RAW content while the model was
+    shown the control-char-stripped form, so a member could put one `\x0b`
+    inside a phrase and every verdict quoting what the model saw was discarded
+    as "not in content" - a clean evasion primitive that failed closed.
+
+    Order matters and is the donor implementation's:
+    control-char strip -> marker forgery disarm.
     """
-    safe_kind = _KIND_OK.sub("", kind)[:32] or "data"
     cleaned = _CONTROL_CHARS.sub("", text)
     cleaned = cleaned.replace("<<<UNTRUSTED_DATA", "<<<<UNTRUSTED_DATA")
-    cleaned = cleaned.replace("UNTRUSTED_DATA__", "UNTRUSTED_DATA___")
+    return cleaned.replace("UNTRUSTED_DATA__", "UNTRUSTED_DATA___")
+
+
+def wrap_untrusted(text: str, *, kind: str) -> str:
+    """Wrap user-originated text in kinded untrusted-data markers."""
+    safe_kind = _KIND_OK.sub("", kind)[:32] or "data"
     return (
-        _CONTAIN_OPEN.format(kind=safe_kind) + cleaned + _CONTAIN_CLOSE.format(kind=safe_kind)
+        _CONTAIN_OPEN.format(kind=safe_kind)
+        + sanitise(text)
+        + _CONTAIN_CLOSE.format(kind=safe_kind)
     )
 
 

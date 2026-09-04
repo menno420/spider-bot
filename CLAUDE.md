@@ -129,6 +129,32 @@ structural change - that plan outranks preferences you arrive with.
     number the project is ranked against. `cogs/membership.py` restores every
     other role automatically and deliberately raises this one to the owner.
 
+28. **A caller that needs its own system prompt passes one, and an unknown
+    `mode` is refused.** `Gateway.reply` dispatches on a table (`_INSTRUCTIONS`)
+    rather than on `mode == "mention"` with everything else falling to the
+    initiative branch. `MEASURED` 2026-09-04, and this is what the invariant is
+    made of: `mode="moderation"` took the initiative branch from the day the
+    classifier was written, so `classifier.SYSTEM` — every judgement rule that
+    keeps a frustrated tester from being timed out — was never sent, and the
+    final instruction told the classifier to answer `PASS` when unsure. The
+    system prompt override never replaces `safety.SYSTEM_SAFETY`; the gateway
+    appends it, so a caller cannot ship one without the injection rules.
+
+29. **A rule that acts on person-directed conduct requires `targets_member`.**
+    A field the schema asks for and nothing reads is worse than no field: it
+    reads as a check. `MEASURED` 2026-09-04, a verdict saying *"general
+    frustration, not aimed at anyone"* fired the timeout rule whose own note
+    reads "aimed at someone". A rule that does not match falls through to
+    `flag_for_review`, so the narrowing always adds a human rather than
+    removing a protection.
+
+30. **Who counts as staff is defined once,** in `gate.STAFF_PERMISSIONS`, and
+    `prechecks` imports it. Two lists had drifted: a helper whose only elevated
+    permission was `kick_members` or `manage_messages` was analysed AND actable
+    while a `ban_members` helper was protected. When these disagree the
+    disagreement is invisible — one decides whether a message is judged, the
+    other whether the action lands, and a member in the gap gets both.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must
