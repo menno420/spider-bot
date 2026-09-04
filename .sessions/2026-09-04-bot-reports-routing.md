@@ -1,8 +1,12 @@
 # 2026-09-04 — #3 merged at the owner's word and verified live; bot reports get their own tracker
 
-> **Status:** `in-progress` — branch `claude/spider-bot-bot-reports`, born red.
-> Flips `complete` after the PR is green, reviewed once, and the deployment of
-> this change is verified by hash.
+> **Status:** `complete` — branch `claude/spider-bot-bot-reports`, born red and
+> flipped here as the deliberate last step: spider-bot#5 green at `9c67843`,
+> two Codex rounds and one Gemini pass answered, residue disclosed on the PR.
+>
+> **Deployment of THIS change is not yet verified at the flip** — it cannot be
+> before the merge. The follow-up records-only commit writes the hash under
+> *Deployment outcome* below, the same way spider-bot#4 did for #3.
 
 - **📊 Model:** fable-5 · xhigh · feature build
 - **📍 Venue:** cloud-container
@@ -62,7 +66,37 @@ live worker does until rollout step 3.
 
 ## Verification
 
-*(filled at close — real exit codes, the review round, the deployed hash)*
+**Gate at `9c67843`, each read from its own exit code:** `ruff check .` 0 ·
+`python -m pytest` 0 (the run's own count (see the gate line), from 669 at the start of the day) ·
+`python -m compileall spiderbot` 0 · `python docs/journeys.py` 0. CI `quality`
+green on every pushed head.
+
+**External review, three rounds, all answered on the PR with a countable
+table each:**
+
+| round | head | returned | disposition |
+|---|---|---|---|
+| Codex 1 | `d1556b3` | 1 P1 · 5 P2 | 6 fixed, 0 refuted, 0 open |
+| Codex 2 | `f38a580` | 3 P1 · 3 P2 — every one against a round-1 fix | 6 fixed, 0 refuted, 0 open |
+| Gemini (free key) over round 2's fixes | `26822cf` | 3 | 2 fixed, 1 conceded on wording, 0 open |
+
+Codex's cap for this PR reads three in the guard because one request was
+composed in a command whose gate branch failed and never posted; two real
+rounds ran. Recorded in fleet-manager's card as the session idea — the guard
+counts intent, not posts.
+
+**The five that mattered here, and they are one shape again:** the P1s were
+all in the fix I had just written — the conversational pre-sort (two
+whole-message searches, then a missing `crash`, then a hyphen), and an offer
+that disclosed the wrong tracker before recording consent. A fix moves a
+problem; the new place has not been looked at. And the finding I did not
+ask for and could not have: `may_publish` refused a permanently-failed report
+for ever, so the panel section I added to *show* stuck reports pointed at
+nothing anyone could *do*. A person's approval now clears the failure.
+
+**Residue:** the Gemini-round fixes at `9c67843` have had no external review.
+No real Discord interaction and no real GitHub call has been made from this
+branch.
 
 ## Deployment outcome
 
