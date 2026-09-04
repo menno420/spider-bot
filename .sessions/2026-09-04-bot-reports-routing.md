@@ -23,9 +23,12 @@ tracker** · tester ideas **do** reach spider-swing's tracker, labelled.
   `railway.json`. fleet-manager's card for the review is
   `.sessions/2026-09-04-spider-bot-pr-review.md` there.
 - **#3 merged** at his word: merge commit `5a7f8a28`, 2026-09-04T18:42:14Z.
-- **Deployment verified by hash**, not by status — written into the tranche-1
-  card's *Deployment outcome* in this PR, replacing the paragraph that said it
-  was unverified.
+- **Deployment verified by hash**, not by status — measured here at 18:43Z
+  (deployment `6f5c7648`, `meta.commitHash == 5a7f8a28 == main`), and written
+  into the tranche-1 card's *Deployment outcome* by the build session, still
+  running in parallel, minutes later as spider-bot#4 — the same hash and the
+  same `ready` line, neither session aware of the other. This PR's own rewrite
+  of that section was dropped at the merge in favour of the one that landed.
 
 ## What this branch does
 

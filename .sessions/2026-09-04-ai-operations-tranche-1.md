@@ -5,9 +5,10 @@
 > external findings answered, and the residue disclosed on the PR rather than
 > left for the reader to discover.
 >
-> **Deployment is NOT yet verified** — that is the one item this card hands
-> forward, and it is written up under *Deployment outcome* below rather than
-> claimed.
+> **Deployment VERIFIED 2026-09-04T18:43Z** — the owner merged at 18:42:14Z and
+> the new Railway deployment's `meta.commitHash` equals `main` HEAD exactly.
+> This header said "NOT yet verified" until then; the check and what it does
+> *not* cover are under *Deployment outcome* below.
 
 - **📊 Model:** opus-5 · xhigh · feature build
 - **📍 Venue:** cloud-container
@@ -98,26 +99,40 @@ round 3's. A fix moves a problem; the new place has not been looked at.
 
 ## Deployment outcome
 
-**VERIFIED 2026-09-04 by the next session** (`.sessions/2026-09-04-bot-reports-routing.md`),
-after the owner said merge. spider-bot#3 merged at his word at
-`2026-09-04T18:42:14Z` as merge commit **`5a7f8a285a095855e0450b7c237d184344d5a580`**
-(24 commits; the 24th, `8937191`, was the review pass). Railway deployment
-`6f5c7648-3e6c-40a2-acfc-e46cd93b685a`: created `18:42:16Z`, **SUCCESS** by
-`18:43:06Z`, and its **`meta.commitHash` = `5a7f8a28…` = `main` HEAD** — the
-check this section asked for, not the status. The previous live deployment
-(`bc4f9985`) reads REMOVED. Startup read from the deployment log: `synced 12
-guild commands` · `channels not found (features degrade): bot-state,
-case-state, intake-state` (the two new state channels do not exist yet — by
-design) · the `ready` audit event with `channels=["announcements",
-"bug-reports","feedback","general","mod-log","start-here"]`, `intake=false`,
-`github=false`, `moderation="off"`, **`support_feed="feed"`** (the live
-spider-swing feed reached the worker on first boot). What the log cannot show
-and only the owner can: `/home` opens, `/tester count` answers, the AI still
-replies on mention.
+**VERIFIED in production, 2026-09-04T18:43Z.** The owner merged the PR at
+18:42:14Z as `5a7f8a285a095855e0450b7c237d184344d5a580`.
 
-*(The paragraph this replaces, kept for the record: "Not verified — and
-deliberately not claimed. The PR was left for the owner rather than merged …
-this branch touches `spiderbot/`, so it will deploy." It did.)*
+| check | result |
+|---|---|
+| `meta.commitHash` on the new Railway deployment | `5a7f8a285a095855e0450b7c237d184344d5a580` — **byte-for-byte equal to `main` HEAD**, not merely `SUCCESS` |
+| the deployment it replaced | `bc4f9985` → `REMOVING`, which is also what finally confirmed `bc4f9985` was the code that had been serving |
+| the worker's own `ready` line | `ready as Spider Bot#7153 in Slingy Spider; AI=True intake=False moderation=off` |
+| command sync | `synced 12 guild commands` |
+
+**The bot says the off-state out loud, in production, rather than this card
+asserting it:** `AI=True intake=False moderation=off`. And the missing-channel
+path fired exactly as invariant 4 intends — `channels not found (features
+degrade): bot-state, case-state, intake-state`, followed by *"#intake-state not
+found: reports have nowhere durable to go, so intake stays off rather than
+accepting reports it cannot keep."*
+
+Two honest notes on that line. **`bot-state` is pre-existing, not something this
+branch broke** — `config.py:57` at `bf4d7527` already declared it, checked at
+both commits. And **`case-state`/`intake-state` missing is the shipped state, not
+a fault**: the two private channels are step 2 and step 4 of `docs/rollout.md`
+and are the owner's to create.
+
+**What is still NOT verified**, and no log line can settle it: nothing was
+exercised. No report was filed, no message judged, no model call made. Step 1's
+remaining evidence — `/home` opening, `/tester count` answering, the AI replying
+on mention — needs a person in the server. The deploy is proven; the behaviour
+is not.
+
+The watch patterns behaved as documented on the way in: `.railway/railway.ts`
+lists `spiderbot/**`, `requirements.txt`, `.python-version`, this branch touched
+33 files under `spiderbot/`, and it deployed. A docs-only follow-up — including
+this very commit — deliberately will not, so the live hash will lag HEAD from
+here, and that is correct.
 
 ## Next session
 
