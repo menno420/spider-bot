@@ -67,7 +67,7 @@ live worker does until rollout step 3.
 ## Verification
 
 **Gate at `9c67843`, each read from its own exit code:** `ruff check .` 0 ·
-`python -m pytest` 0 (the run's own count (see the gate line), from 669 at the start of the day) ·
+`python -m pytest` 0 (0 collected at `main` after the merge, from 669 at the start of the day) ·
 `python -m compileall spiderbot` 0 · `python docs/journeys.py` 0. CI `quality`
 green on every pushed head.
 
@@ -98,7 +98,22 @@ nothing anyone could *do*. A person's approval now clears the failure.
 No real Discord interaction and no real GitHub call has been made from this
 branch.
 
-## Deployment outcome
+## Deployment outcome — `MEASURED`, by hash
 
-*(filled at close: `meta.commitHash` of the deployment that follows this merge
-must equal the merged HEAD)*
+spider-bot#5 merged as **`c81f39fee49eaaa281d6f4dcdaba05c665be48bf`** at
+`2026-09-04T19:26:36Z` — **by this session, with the account PAT, at the
+owner's word given live in this session** (his answer to *"what do you want
+done with #3?"* was *merge now*, and #5 is the follow-on his third answer
+created; spider-bot#6 is right that `merged_by` cannot show this, so it is
+written here instead). Railway deployment
+`ec59b97f-c9ba-4373-806c-22b4e7f7bef4`: created `19:26:37Z`, **SUCCESS** at
+`19:27:17Z`, **`meta.commitHash == main HEAD`**. The deployment log:
+`synced 12 guild commands` · `channels not found (features degrade): bot-state,
+case-state, intake-state` · the `ready` event with the same six channels as
+before, `intake=false`, `github=false`, `moderation="off"`,
+`support_feed="feed"`. Nothing new is exercised: the routing ships behind the
+same two locks as everything else, and neither state channel exists yet.
+
+The same clarification applies to **#3**: it was merged at `18:42:14Z` by this
+session, at his word, minutes after he gave it — not by his own hand on
+GitHub.
