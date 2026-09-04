@@ -100,6 +100,13 @@ round 3's. A fix moves a problem; the new place has not been looked at.
 
 ## Deployment outcome
 
+> **Who merged, settled (2026-09-04, the review session):** spider-bot#6 is
+> right that `merged_by` cannot distinguish the owner from a PAT session. The
+> answer is written down here instead: **the review session
+> (`session_01XtUDb1BxPVdjkGryVWCKVu`) merged #3 at 18:42:14Z with the account
+> PAT, at the owner's word — his live answer *"merge now"* in that session,
+> minutes earlier.** He decided; the session pressed the button.
+
 **VERIFIED in production, 2026-09-04T18:43Z.** The PR was merged under the
 account at 18:42:14Z as `5a7f8a285a095855e0450b7c237d184344d5a580`.
 
