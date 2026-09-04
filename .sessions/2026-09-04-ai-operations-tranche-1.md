@@ -106,8 +106,8 @@ moderation at any channel at all).
 
 When it merges, the check is `meta.commitHash` on the new Railway deployment
 equalling HEAD — **not** the deploy status. And note the honest complication:
-`railway.json` sets watch patterns (`spiderbot/**`, `requirements.txt`,
-`railway.json`, `.python-version`), and this branch touches `spiderbot/`, so it
+`.railway/railway.ts` sets watch patterns (`spiderbot/**`, `requirements.txt`,
+`.python-version`), and this branch touches `spiderbot/`, so it
 **will** deploy. Preserved exactly; a docs-only follow-up deliberately will not.
 
 ## Next session

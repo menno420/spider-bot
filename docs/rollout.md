@@ -31,7 +31,7 @@ public tracker or restrict their account.
 Merge. Verify the **deployed commit**, not Railway's status: the new
 deployment's `meta.commitHash` must equal the merged `HEAD`. `SUCCESS` alone
 proves nothing about which code is running (the `serviceConnect` trap in
-`README.md`). Note that `railway.json`'s watch patterns mean a docs- or
+`README.md`). Note that `.railway/railway.ts`'s watch patterns mean a docs- or
 tests-only commit deliberately does **not** deploy and the live hash will lag —
 that is correct, not a failure.
 
@@ -112,7 +112,10 @@ Six things, each one exact and none of which a session can do:
    **Issues: Read and write**, and nothing else. Set it as `GITHUB_TOKEN` on
    the Railway `spider-bot` worker. Only he can do this: `spider-swing` is a
    User-owned repository, so there is no organisation-approval path and no
-   delegated issuance.
+   delegated issuance. Set it in the dashboard, not in `.railway/railway.ts`:
+   the IaC file already declares it — and every other switch in this document
+   — with `preserve()`, so a later `railway config apply` keeps the dashboard
+   value instead of deleting a variable the file did not name.
 2. **The label `from-spider-bot`** in `menno420/spider-swing` (any colour;
    description "Filed by Spider Bot from the Slingy Spider Discord"). Verified
    absent 2026-09-04 — the repo has thirteen labels and this is not one. If he

@@ -346,8 +346,8 @@ not a gate). Read the real exit code, never `$?` after a pipe. Live check: run l
 five resolved channels - but never leave a local instance running while the
 Railway worker is up: that is two live bots answering in the real server.
 Deploy = push to main (Railway auto-deploys the `spider-bot` service; verify
-the new deployment's `meta.commitHash` equals HEAD). **`railway.json` sets
-watch patterns** (`spiderbot/**`, `requirements.txt`, `railway.json`,
+the new deployment's `meta.commitHash` equals HEAD). **`.railway/railway.ts` sets
+watch patterns** (`spiderbot/**`, `requirements.txt`,
 `.python-version`), so a docs- or tests-only commit deliberately does *not*
 deploy and the live `commitHash` will lag HEAD - that is correct, not a
 failure. Without them a scheduled data commit once restarted a donor's

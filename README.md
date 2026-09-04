@@ -86,7 +86,7 @@ an extraction-ledger entry (source repo + commit + file/symbol + decision).
 
 - `DISCORD_TOKEN` - the bot token. Lives in: the Discord Developer Portal,
   the owner's laptop as user env var `DISCORD_BOT_TOKEN_SPIDERBOT` (used for
-  API-driven server setup), and (future) a Railway service variable.
+  API-driven server setup), and the Railway service variable.
   If ever exposed: Portal -> Bot -> Reset Token, then update Railway.
   GitHub secret scanning auto-invalidates Discord tokens pushed to public
   repos - one more reason this repo stays public.
@@ -112,7 +112,7 @@ values only.
 
 Railway project **spider-bot** (`f519761e-a71d-4f4b-8cf6-1dbce06ececf`),
 service **worker** (`a7f17dde-34f6-4ee0-89ca-785cf61aaca1`), environment
-`production`, region europe-west4, NIXPACKS build, start command
+`production`, region europe-west4, Railpack build, start command
 `python -m spiderbot`, app sleeping off. Variables set: `DISCORD_TOKEN`,
 `ANTHROPIC_API_KEY`, `GUILD_ID` (names here, values only in Railway).
 

@@ -123,7 +123,7 @@ Nothing here is required to merge. Each line buys one capability.
 | To turn on | Do this | Until you do |
 |---|---|---|
 | Durable reports | Create a **private** channel `#intake-state` the bot can read and write | Intake is off and every panel says so |
-| Moderation cases | Create a **private** channel `#mod-cases`, same permissions | Moderation cannot record and stays off |
+| Moderation cases | Create a **private** channel `#case-state`, same permissions | Moderation cannot record and stays off |
 | Reports reaching GitHub | Set `GITHUB_TOKEN` in Railway to a **fine-grained** token scoped to `menno420/spider-swing` only, with Issues: read & write and nothing else, then set `INTAKE_PUBLISH_ENABLED=true` | Reports are stored and queued; the bot says plainly that it could not file them |
 | Moderation watching | Set `MOD_WATCH_CHANNELS` and `MOD_MODE=shadow` | Nothing is judged |
 | Current game facts | Merge `menno420/spider-swing#181` and set `SUPPORT_FEED_URL` | The bot answers from a static block and says so |
