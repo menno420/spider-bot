@@ -147,6 +147,12 @@ def load() -> Config:
         mod_watch_channels=_csv("MOD_WATCH_CHANNELS"),
         mod_ceiling=(_env("MOD_CEILING", "flag_for_review") or "flag_for_review").strip().lower(),
         mod_model=_env("MOD_MODEL", "") or "",
-        support_feed_url=_env("SUPPORT_FEED_URL", Config.support_feed_url) or "",
+        # `os.environ.get`, not `_env`: the documented way to turn the feed off
+        # is to set this to an empty string, and `_env` replaces an empty value
+        # with the default. Codex, spider-bot#3, 2026-09-04 — the advertised
+        # way to select the built-in block could not be selected.
+        support_feed_url=os.environ.get(
+            "SUPPORT_FEED_URL", Config.support_feed_url
+        ).strip(),
         support_feed_refresh_s=_env_int("SUPPORT_FEED_REFRESH_SECONDS", 3600),
     )

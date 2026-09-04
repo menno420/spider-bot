@@ -976,3 +976,134 @@ def test_the_moderation_model_override_reaches_the_call():
     service2._classifier = Classifier(plain)
     run(service2.handle_message(a_message(), bot_user_id=999))
     assert plain.model is None
+
+
+# -- what Codex found at e09ef2f ----------------------------------------------
+
+
+def test_a_thread_inherits_its_parents_watch_state():
+    """Codex, spider-bot#3, 2026-09-04: the watch list was compared against
+    `message.channel.name`, which for a thread is whatever the member who
+    created it typed — so every message in every thread under a watched channel
+    was skipped, and creating a thread was a bypass anyone could perform."""
+    thread = types.SimpleNamespace(
+        name="bug in level 3", parent=types.SimpleNamespace(name="general"), id=77
+    )
+    message = a_message()
+    message.channel = thread
+    assert prechecks.should_analyse(
+        message, bot_user_id=999, enabled_channels=("general",)
+    ).proceed
+
+    # Positive control: a thread under an UNWATCHED parent is still skipped.
+    elsewhere = a_message()
+    elsewhere.channel = types.SimpleNamespace(
+        name="chat", parent=types.SimpleNamespace(name="off-topic"), id=78
+    )
+    assert not prechecks.should_analyse(
+        elsewhere, bot_user_id=999, enabled_channels=("general",)
+    ).proceed
+
+
+def test_an_edited_message_is_judged_again():
+    """A member could post harmless text in a watched channel, let it be
+    classified, and edit the same message into abuse without the new content
+    ever entering the pipeline."""
+    from spiderbot.cogs.moderation import ModerationCog
+
+    service = a_service(mode="shadow", text=verdict_json())
+    bot = types.SimpleNamespace(
+        moderation=service, user=types.SimpleNamespace(id=999), channels={}
+    )
+    cog = ModerationCog.__new__(ModerationCog)
+    cog.bot = bot
+    cog.cfg = CFG
+
+    before = a_message("the reel feels weak on this build")
+    after = a_message("you are worthless and everyone here knows it")
+    run(cog.on_message_edit(before, after))
+    assert len(run(service.cases())) == 1
+
+    # Positive control: an edit that did not change the content — an embed
+    # resolving, a pin — costs no classifier call.
+    run(cog.on_message_edit(after, after))
+    assert len(run(service.cases())) == 1
+
+
+def test_one_member_cannot_drive_the_classifier_without_limit():
+    """Codex, spider-bot#3, 2026-09-04: every qualifying message started an
+    external classifier call with no per-member limit, no global budget and no
+    concurrency bound — spending the API budget and the store's fixed history
+    even in shadow mode, where nothing is enforced."""
+    gateway = FakeGateway(verdict_json())
+    service = a_service(mode="shadow")
+    service._classifier = Classifier(gateway)
+    author = member(5, "flooder")
+    for _ in range(50):
+        run(service.handle_message(a_message(author=author), bot_user_id=999))
+    assert len(gateway.calls) == 1
+
+    # Positive control: the brake is per-member, not a tap anyone can close.
+    run(service.handle_message(a_message(author=member(6, "other")), bot_user_id=999))
+    assert len(gateway.calls) == 2
+
+
+def test_a_staff_action_is_recorded_before_it_happens():
+    """The pre-write covered the autonomous path only, so `/modact` could ban
+    someone and then report a case id `/case` cannot retrieve. A staff action
+    is MORE in need of a record than an autonomous one: it has a name on it."""
+
+    class RefusingStore(store.InMemoryStore):
+        async def append(self, collection, key, data):
+            return collection != store.CASES
+
+    subject = member(5, "target")
+    case = run(
+        a_service(mode="enforce", backing=RefusingStore()).staff_action(
+            Operation.TIMEOUT_SHORT, guild=a_guild(), subject=subject,
+            actor=moderator(), reason="x",
+        )
+    )
+    assert case.status is CaseStatus.REFUSED
+    assert subject.timeout_calls == []
+
+
+def test_a_review_that_could_not_be_stored_is_not_reported_as_marked():
+    """The write result was ignored, so `/case review` told the moderator it
+    was marked while the tally that justifies enforcement quietly lost it."""
+
+    backing = store.InMemoryStore()
+    service = a_service(mode="shadow", text=verdict_json(), backing=backing)
+    case = run(service.handle_message(a_message(), bot_user_id=999))
+
+    # Reads keep working and only the WRITE fails — otherwise `review` returns
+    # None because it cannot find the case, and the test passes for the wrong
+    # reason without exercising the append at all.
+    async def refuse(collection, key, data):
+        return False
+
+    backing.append = refuse
+    correct = next(iter(ReviewOutcome))
+    assert run(service.review(case.id, correct, by="menno")) is None
+
+    # Positive control: with the write working, the same call marks the case.
+    ok = a_service(mode="shadow", text=verdict_json())
+    other = run(ok.handle_message(a_message(), bot_user_id=999))
+    reviewed = run(ok.review(other.id, correct, by="menno"))
+    assert reviewed is not None and reviewed.review_outcome == correct
+
+
+def test_a_clamped_case_is_not_counted_as_an_action():
+    """With the SHIPPING ceiling every clamped case counted as "would have
+    acted", so the mod-log fired and Home's count inflated for an outcome the
+    ceiling deliberately permits."""
+    service = a_service(mode="shadow", text=verdict_json(), ceiling=Operation.FLAG_FOR_REVIEW)
+    case = run(service.handle_message(a_message(), bot_user_id=999))
+    assert case.operation is Operation.FLAG_FOR_REVIEW
+    assert not case.would_have_acted
+    assert "ceiling held it" in case.summary_line()
+
+    # Positive control: a real mutating outcome still counts.
+    acting = a_service(mode="shadow", text=verdict_json())
+    real = run(acting.handle_message(a_message(), bot_user_id=999))
+    assert real.would_have_acted

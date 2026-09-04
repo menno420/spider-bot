@@ -75,6 +75,22 @@ MIN_LENGTH = 12
 _LINK = re.compile(r"https?://", re.IGNORECASE)
 
 
+def watched_name(channel) -> str:
+    """The channel name the watch list should be compared against.
+
+    A thread's own `.name` is whatever the member who created it typed, so
+    comparing that against `MOD_WATCH_CHANNELS` meant every message in every
+    thread under a watched channel was skipped — creating a thread was a
+    moderation bypass anyone could perform. Codex, spider-bot#3, 2026-09-04.
+    A thread inherits its parent's watch state, which is also the only reading
+    an owner naming `general` would expect.
+    """
+    parent = getattr(channel, "parent", None)
+    if parent is not None:
+        return getattr(parent, "name", "") or ""
+    return getattr(channel, "name", "") or ""
+
+
 def should_analyse(
     message,
     *,
@@ -95,7 +111,7 @@ def should_analyse(
     if bot_user_id is not None and getattr(author, "id", None) == bot_user_id:
         return Precheck.skip("our own message")
 
-    channel_name = getattr(getattr(message, "channel", None), "name", "") or ""
+    channel_name = watched_name(getattr(message, "channel", None))
     if not enabled_channels:
         return Precheck.skip("moderation is not enabled in any channel")
     if channel_name not in enabled_channels:

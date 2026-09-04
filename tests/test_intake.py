@@ -1239,3 +1239,107 @@ def test_the_report_dataclass_itself_defaults_to_uncleared():
     )
     assert bare.reporter_cleared is False
     assert not bare.is_public_safe
+
+
+def test_an_old_record_with_no_consent_field_is_not_publishable():
+    """The dataclass and the service parameter both fail closed; the
+    PERSISTENCE boundary did not. Codex, spider-bot#3, 2026-09-04: any record
+    written before the field existed deserialised as consented."""
+    old = {
+        "schema_version": 1, "id": "SB-R-OLD", "category": "bug", "title": "t",
+        "description": "d", "submitted_at": 1.0, "sensitivity": "public_safe",
+        "sensitivity_reason": "r", "status": "stored", "approved_by": "",
+    }
+    assert Report.from_record(old).reporter_cleared is False
+    assert not Report.from_record(old).is_public_safe
+    # Positive control: a record that RECORDS the consent keeps it.
+    assert Report.from_record({**old, "reporter_cleared": True}).reporter_cleared
+
+
+def test_a_double_press_that_survives_a_restart_still_files_once():
+    """The lock closes concurrent presses only while the process lives, and the
+    marker was written AFTER filing — so a restart in between, or a failed
+    marker write, left the button pointing at an unconsumed draft."""
+    svc = a_service()
+    draft_id = _offer(svc, user_id=42)
+    first = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    first.client = _Bot(svc)
+    run(intake_cog.ConfirmFiling(draft_id).callback(first))
+
+    # A brand-new item, as a restart would rebuild it from the custom_id.
+    second = FakeInteraction(guild=None, user=FakeUser(42, "reporter"))
+    second.client = _Bot(svc)
+    run(intake_cog.ConfirmFiling(draft_id).callback(second))
+    assert len(run(svc.all_reports())) == 1
+
+    # And the id the member was given is the one that exists.
+    claimed = run(svc._store.get(intake_cog.DRAFTS, draft_id))["filed_report_id"]
+    assert run(svc.get(claimed)) is not None
+
+
+def test_run_evidence_attached_to_a_message_reaches_the_report():
+    """Codex, spider-bot#3, 2026-09-04: `evidence.parse` had no production
+    caller at all, so the documented journey where a tester attaches an export
+    could not happen and the JSON would have been stored as truncated prose."""
+    import json as _json
+
+    from conftest import FakeAI, FakeBot, FakeChannel, FakeMessage, make_cfg
+
+    from spiderbot import evidence
+
+    export = _json.dumps({
+        "format": evidence.SUPPORTED_FORMAT,
+        "ledger": {
+            "schema_version": 2, "history_limit": 100,
+            "records": [{
+                "record_id": "r1", "difficulty_id": "standard",
+                "terminal_outcome": "fall", "configuration_kind": "standard",
+                "input_source": "human", "final_region_id": "canopy",
+                "final_distance_pixels": 51234.0, "active_duration_seconds": 61.0,
+            }],
+            "total_completed_recorded_runs": 1,
+        },
+    }).encode()
+
+    class Attachment:
+        filename = "slingy-run-evidence.json"
+        size = len(export)
+
+        async def read(self):
+            return export
+
+    bot = FakeBot(make_cfg(initiative_channels=("general",)), FakeAI())
+    bot.intake = a_service()
+    cog = intake_cog.IntakeCog(bot)
+    message = FakeMessage(
+        "the game froze when I released the silk near 3 km and it crashed",
+        FakeUser(42, "tester"), FakeChannel(name="general"), guild=object(),
+    )
+    message.id = 5150
+    message.attachments = [Attachment()]
+    run(cog.on_message(message))
+
+    [draft] = list(run(bot.intake._store.load(intake_cog.DRAFTS)).values())
+    assert draft["evidence_format"] == evidence.SUPPORTED_FORMAT
+    assert any("5,123 m" in line for line in draft["evidence_summary"]), draft
+
+    # Positive control: an ordinary JSON attachment is not evidence and does
+    # not stop the report being offered.
+    class NotEvidence(Attachment):
+        @staticmethod
+        async def read():
+            return b'{"hello": "world"}'
+
+    bot2 = FakeBot(make_cfg(initiative_channels=("general",)), FakeAI())
+    bot2.intake = a_service()
+    cog2 = intake_cog.IntakeCog(bot2)
+    plain = FakeMessage(
+        "the game froze when I released the silk near 3 km and it crashed",
+        FakeUser(43, "tester"), FakeChannel(name="general"), guild=object(),
+    )
+    plain.id = 5151
+    plain.attachments = [NotEvidence()]
+    run(cog2.on_message(plain))
+    [d2] = list(run(bot2.intake._store.load(intake_cog.DRAFTS)).values())
+    assert d2["evidence_format"] == ""
+    assert d2["title"]

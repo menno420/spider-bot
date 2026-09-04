@@ -177,6 +177,25 @@ class ModerationCog(commands.Cog):
             ephemeral=True,
         )
 
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        """Re-judge a message whose content changed.
+
+        Codex, spider-bot#3, 2026-09-04: only `on_message` was registered, so a
+        member could post harmless text in a watched channel, let it be
+        classified, and edit the same message into abuse or a fake tester link
+        without the new content ever entering the pipeline. Everything
+        downstream is unchanged — the same precheck, the same budget, the same
+        gate — so an edit costs exactly what a new message costs.
+
+        Edits that do not change the content (an embed resolving, a pin) are
+        ignored: Discord fires this for those too, and re-judging them would
+        spend the classifier on nothing.
+        """
+        if (before.content or "") == (after.content or ""):
+            return
+        await self.on_message(after)
+
     @app_commands.command(
         name="modact", description="Take a moderation action, recorded as a case"
     )

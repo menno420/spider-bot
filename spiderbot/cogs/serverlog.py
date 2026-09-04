@@ -35,7 +35,7 @@ import logging
 import discord
 from discord.ext import commands
 
-from spiderbot import audit, style
+from spiderbot import audit, redact, style
 
 log = logging.getLogger("spiderbot.serverlog")
 
@@ -157,7 +157,7 @@ class ServerLogCog(commands.Cog):
             body = (
                 f"**{style.escape_name(cached.author.display_name)}**'s message "
                 f"in {where} was deleted:\n>>> "
-                + style.escape_name(cached.content or "(no text)")[:900]
+                + redact.for_discord(cached.content or "(no text)", limit=900)
             )
         await self._post(f"{style.WARN} Message deleted", body, style.WARNING)
         audit.stdout_event(

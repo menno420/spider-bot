@@ -74,7 +74,14 @@ class SpiderBot(commands.Bot):
         reports queued indefinitely unless someone happened to run it, and both
         surfaces said otherwise.
         """
-        if self.intake is None:
+        if self.intake is None or not getattr(self.intake._github, "available", False):
+            # Codex, spider-bot#3, 2026-09-04: the loop started whenever the
+            # state channel existed, so with publication disabled or no token
+            # every pass wrote a `publish_pending` generation and then another
+            # `publish_failed` one — against a `NullGitHubClient` that cannot
+            # become available without a redeploy. Those writes eat the store's
+            # fixed 2,000-message horizon, which is how a real report goes
+            # missing. A sink that cannot publish is not a sink to retry at.
             return
         outcomes = await self.intake.retry_pending()
         if outcomes:
@@ -173,6 +180,7 @@ class SpiderBot(commands.Bot):
         missing = wanted - set(self.channels)
         if missing:
             log.warning("channels not found (features degrade): %s", ", ".join(sorted(missing)))
+        # Idempotent across reconnects — `on_ready` fires again on every one.
         self._build_services()
         await self.support.refresh()
         if not self._support_refresh.is_running():
@@ -208,7 +216,17 @@ class SpiderBot(commands.Bot):
         """
         cfg = self.cfg
         intake_channel = self.channels.get(cfg.ch_intake_state)
-        if intake_channel is not None:
+        if intake_channel is not None and self.intake is not None:
+            # Already built, and this process is still the one that built it.
+            # Codex, spider-bot#3, 2026-09-04: `on_ready` fires again on every
+            # gateway reconnect and this rebuilt unconditionally, discarding a
+            # live `IntakeService` — and with it the per-report locks and the
+            # `_published_unrecorded` map, which is the only in-process guard
+            # between a failed store write and one report becoming two public
+            # issues. Nothing here changes without a redeploy, so nothing is
+            # gained by rebuilding.
+            log.debug("intake service already built; keeping it across the reconnect")
+        elif intake_channel is not None:
             client: github_sink.GitHubClient
             if not cfg.intake_publish_enabled:
                 client = github_sink.NullGitHubClient(

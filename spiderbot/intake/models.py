@@ -476,7 +476,12 @@ class Report:
             ai_tags=tuple(str(x) for x in (data.get("ai_tags") or []))[:MAX_TAGS],
             sensitivity=sensitivity,
             sensitivity_reason=str(data.get("sensitivity_reason") or ""),
-            reporter_cleared=bool(data.get("reporter_cleared", True)),
+            # False, like the dataclass and the service parameter. Codex,
+            # spider-bot#3, 2026-09-04: this boundary still defaulted True, so
+            # any record written before the field existed — or any partially
+            # populated one — deserialised as consented and could be published
+            # with no evidence its reporter ever saw the notice.
+            reporter_cleared=bool(data.get("reporter_cleared", False)),
             approved_by=str(data.get("approved_by") or ""),
             github_issue_number=data.get("github_issue_number"),
             github_issue_url=str(data.get("github_issue_url") or ""),

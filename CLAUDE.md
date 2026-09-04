@@ -299,6 +299,26 @@ structural change - that plan outranks preferences you arrive with.
     than as a habit, because the shipped table satisfying a rule says nothing
     about the next edit.
 
+49. **A thread is its parent channel.** `message.channel.name` on a thread is
+    whatever the member who created it typed, so comparing it against a watch
+    list made creating a thread a moderation bypass anyone could perform. Use
+    `prechecks.watched_name`, which resolves the parent.
+
+50. **`on_message` is half a listener; `on_message_edit` is the other half.**
+    Post something harmless, let it be classified, edit it into abuse — without
+    the edit listener the new content never entered the pipeline at all.
+
+51. **Every Discord component limit is pinned by a test that WALKS the module.**
+    A placeholder one character over 100 makes the whole modal unopenable, and
+    nothing says so — `ComplaintModal` sat at 104 characters and had never
+    opened. `tests/test_forms.py::test_every_modal_field_is_inside_discords_limits`
+    enumerates the modals rather than checking the ones someone remembered.
+
+52. **A default that fails closed fails closed at EVERY boundary.**
+    `reporter_cleared` was False on the dataclass and on the service parameter
+    and True in `from_record`, so any record written before the field existed
+    deserialised as consented. Three defaults, one rule.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

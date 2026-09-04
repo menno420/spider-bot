@@ -536,3 +536,62 @@ def test_cached_support_facts_survive_a_continuing_outage():
     fresh = support.SupportFeed(cfg)
     fresh._fetch = dead
     assert asyncio.run(fresh.refresh()).source is support.Source.BUILT_IN
+
+
+def test_a_malformed_two_hundred_does_not_discard_a_good_cache():
+    """The last-known-good fix handled `raw is None` only. Codex, spider-bot#3,
+    2026-09-04: a 200 carrying malformed JSON or an unknown schema still made
+    `parse()` return the built-in block, and that assignment threw the valid
+    cache away — a feed that starts serving nonsense is the same class of
+    failure as one that stops answering."""
+    import asyncio
+
+    from conftest import make_cfg
+
+    cfg = make_cfg()
+    object.__setattr__(cfg, "support_feed_url", "https://example/feed.json")
+    feed = support.SupportFeed(cfg)
+    feed._facts = support.SupportFacts(source=support.Source.FEED, build_version="0.45.0")
+
+    async def nonsense():
+        return "{ this is not json", ""
+
+    feed._fetch = nonsense
+    facts = asyncio.run(feed.refresh(force=True))
+    assert facts.source is support.Source.CACHED
+    assert facts.build_version == "0.45.0"
+
+    # Positive control: a GOOD 200 replaces the cache, which is the whole point.
+    good = json.dumps({
+        "format": support.FEED_FORMAT,
+        "schema_version": support.SUPPORTED_SCHEMA,
+        "build_version": "0.46.0",
+    })
+
+    async def fine():
+        return good, ""
+
+    feed._fetch = fine
+    assert asyncio.run(feed.refresh(force=True)).build_version == "0.46.0"
+
+
+def test_an_empty_support_feed_url_turns_the_feed_off():
+    """The documented way to select the built-in block. Codex, spider-bot#3,
+    2026-09-04: `_env` replaced an empty value with the default, so it could
+    not be selected."""
+    import os
+
+    from spiderbot import config
+
+    before = dict(os.environ)
+    try:
+        os.environ.update(
+            DISCORD_BOT_TOKEN_SPIDERBOT="x" * 60, GUILD_ID="1", SUPPORT_FEED_URL=""
+        )
+        assert config.load().support_feed_url == ""
+        # Positive control: unset means the default, not empty.
+        del os.environ["SUPPORT_FEED_URL"]
+        assert config.load().support_feed_url.startswith("https://")
+    finally:
+        os.environ.clear()
+        os.environ.update(before)

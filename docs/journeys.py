@@ -266,8 +266,11 @@ async def main():
         policy=P.Policy(ceiling=C.Operation.TIMEOUT_LONG), backing=store.InMemoryStore(),
         enabled_channels=("general",))
     ids_ = []
-    for text in ("you are worthless", "this game is garbage"):
-        c = await s2.handle_message(message(text), bot_user_id=999)
+    # Two DIFFERENT members: the classifier now has a per-member cooldown, so
+    # two messages from one person seconds apart is one classifier call, which
+    # is the brake doing its job rather than a bug in this walkthrough.
+    for who, text in ((5, "you are worthless"), (6, "this game is garbage")):
+        c = await s2.handle_message(message(text, author_id=who), bot_user_id=999)
         if c: ids_.append(c.id)
     await s2.review(ids_[0], ReviewOutcome.CORRECT, by="menno")
     await s2.review(ids_[1], ReviewOutcome.TOO_STRICT, by="menno", note="just frustration with the game")

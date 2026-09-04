@@ -129,6 +129,10 @@ class IntakeService:
         #: cites this field by name.
         reporter_cleared: bool = False,
         correlation_id: str = "",
+        #: A caller that has already CLAIMED an id passes it, so a retry files
+        #: the same report rather than a second one. Everyone else lets the
+        #: service mint one.
+        report_id: str = "",
     ) -> Outcome:
         """File one report. Store first; publication is a separate step.
 
@@ -154,7 +158,7 @@ class IntakeService:
                 ),
             )
         report = Report(
-            id=ids.report_id(),
+            id=report_id or ids.report_id(),
             category=category,
             title=title.strip(),
             description=description.strip(),
@@ -230,6 +234,19 @@ class IntakeService:
 
         Nothing else sets `approved_by`, and `Report.may_publish` requires it.
         This is the whole answer to "a regex miss must not mean publish".
+        """
+        async with self._locks[report_id]:
+            return await self._approve_locked(report_id, by=by)
+
+    async def _approve_locked(self, report_id: str, *, by: str) -> Report | None:
+        """The body of `approve`, under the same per-report lock `publish` takes.
+
+        Codex, spider-bot#3, 2026-09-04: approval was a read-modify-write
+        OUTSIDE that lock, so `/publish` on an already-approved failed report
+        racing the new scheduled retry could complete a stale append after the
+        retry recorded PUBLISHED — erasing the issue number, re-queueing the
+        report, and leaving the marker search as the only thing between that
+        and a duplicate public issue.
         """
         report = await self.get(report_id)
         if report is None:

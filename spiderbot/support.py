@@ -363,10 +363,21 @@ class SupportFeed:
             return self._facts
 
         parsed = parse(raw)
-        self._facts = parsed
         if parsed.live:
+            self._facts = parsed
             self._fetched_at = self._now()
+        elif self._facts.build_version:
+            # A 200 whose body is malformed, or carries an unknown schema, is
+            # the same class of failure as a 500 — and Codex, spider-bot#3,
+            # 2026-09-04: this branch discarded a good cache for it, where the
+            # transport-failure branch above deliberately keeps one. Same
+            # treatment: hold last-known-good and say the feed is stale.
+            log.warning("support feed refused: %s (keeping cached facts)", parsed.problem)
+            self._facts = SupportFacts(
+                **{**self._facts.__dict__, "source": Source.CACHED, "problem": parsed.problem}
+            )
         else:
+            self._facts = parsed
             log.warning("support feed refused: %s", parsed.problem)
         return self._facts
 
@@ -387,11 +398,23 @@ class SupportFeed:
                 # spider-bot#3, 2026-09-04: `response.text()` allocated
                 # whatever the endpoint sent, so the advertised 256 KiB cap
                 # protected the parser and not the worker's memory.
-                body = await response.content.read(MAX_BYTES + 1)
-                if len(body) > MAX_BYTES:
+                # Accumulate to EOF. `StreamReader.read(n)` returns up to the
+                # bytes CURRENTLY AVAILABLE, not n of them — Codex,
+                # spider-bot#3, 2026-09-04: a valid feed arriving in more than
+                # one network chunk was truncated to its first chunk and then
+                # rejected as malformed, while being well under the cap.
+                chunks: list[bytes] = []
+                size = 0
+                while size <= MAX_BYTES:
+                    chunk = await response.content.read(64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                if size > MAX_BYTES:
                     return None, "feed is implausibly large"
                 try:
-                    return body.decode("utf-8"), ""
+                    return b"".join(chunks).decode("utf-8"), ""
                 except UnicodeDecodeError:
                     return None, "feed is not valid UTF-8"
         except (aiohttp.ClientError, TimeoutError) as exc:

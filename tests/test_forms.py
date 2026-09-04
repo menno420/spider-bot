@@ -193,3 +193,48 @@ def test_the_question_is_wrapped_before_it_reaches_the_model():
     (payload, mode) = bot.ai.calls[0]
     assert "UNTRUSTED_DATA__current_user_message__BEGIN" in payload
     assert mode == "mention"
+
+
+def test_every_modal_field_is_inside_discords_limits():
+    """A modal whose placeholder is one character over is refused by Discord as
+    an invalid component: the form does not open at all.
+
+    Codex, spider-bot#3, 2026-09-04. Walking every modal in the module rather
+    than the ones someone remembered is the point — `ComplaintModal` was 104
+    characters BEFORE the change that prompted this test, so it had never
+    opened, and nothing anywhere would have said so.
+    """
+    import inspect
+    import warnings
+
+    from spiderbot.ui import forms
+
+    # discord.py 2.7 deprecates `TextInput.label` in favour of `discord.ui.Label`.
+    # Reading it is exactly what this test is for, and the migration is its own
+    # piece of work — so the read is silenced here rather than left to drift the
+    # suite's warning count.
+    warnings.filterwarnings("ignore", message="label is deprecated", category=DeprecationWarning)
+
+    modals = [
+        obj
+        for _name, obj in inspect.getmembers(forms, inspect.isclass)
+        if issubclass(obj, discord.ui.Modal) and obj is not discord.ui.Modal
+    ]
+    assert len(modals) >= 5, "the walk must actually be finding the modals"
+    for modal in modals:
+        title = getattr(modal, "title", "") or ""
+        assert len(title) <= forms.MAX_MODAL_TITLE, f"{modal.__name__} title"
+        fields = 0
+        for name, item in vars(modal).items():
+            label = getattr(item, "label", None)
+            if label is None:
+                continue
+            fields += 1
+            assert len(label) <= forms.MAX_LABEL, f"{modal.__name__}.{name} label"
+            placeholder = getattr(item, "placeholder", None)
+            if isinstance(placeholder, str):
+                assert len(placeholder) <= forms.MAX_PLACEHOLDER, (
+                    f"{modal.__name__}.{name} placeholder is "
+                    f"{len(placeholder)} characters"
+                )
+        assert 0 < fields <= 5, f"{modal.__name__} has {fields} inputs (Discord allows 5)"

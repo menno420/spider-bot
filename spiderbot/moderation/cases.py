@@ -23,7 +23,7 @@ from enum import StrEnum
 from typing import Any
 
 from spiderbot import redact
-from spiderbot.moderation.contracts import Operation
+from spiderbot.moderation.contracts import MUTATING_OPERATIONS, Operation
 
 
 class Source(StrEnum):
@@ -109,7 +109,13 @@ class Case:
     @property
     def would_have_acted(self) -> bool:
         """True when the policy chose an action that shadow mode withheld."""
-        return self.operation is not Operation.NOTHING and not self.acted
+        # Membership in `MUTATING_OPERATIONS`, not inequality with NOTHING.
+        # Codex, spider-bot#3, 2026-09-04: with the SHIPPING ceiling
+        # (`flag_for_review`) every clamped case counted as "would have acted"
+        # — so the mod-log fired and Home's count inflated for an outcome the
+        # ceiling deliberately permits, and the summary said "would have done
+        # flag_for_review" instead of naming the operation actually withheld.
+        return self.operation in MUTATING_OPERATIONS and not self.acted
 
     def summary_line(self) -> str:
         """One line for a staff list. Member text is escaped for Discord."""
@@ -121,6 +127,11 @@ class Case:
             what = f"did {self.performed}"
         elif self.would_have_acted:
             what = f"would have done {self.operation}"
+        elif (self.decision or {}).get("clamped_from"):
+            # The ceiling held something back. Naming the operation the policy
+            # WANTED is the whole point of running shadow mode: "would have
+            # done flag_for_review" tells a reviewer nothing.
+            what = f"policy wanted {(self.decision or {})['clamped_from']}, ceiling held it"
         elif self.refusal_reason:
             what = "refused"
         else:

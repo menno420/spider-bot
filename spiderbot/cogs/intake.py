@@ -38,7 +38,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from spiderbot import audit, ids, redact, style
+from spiderbot import audit, evidence, ids, redact, style
 from spiderbot.intake.models import Category, Reporter
 from spiderbot.ui.base import Panel
 from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
@@ -213,7 +213,28 @@ class ConfirmFiling(
             category = Category(draft.get("category", "general"))
         except ValueError:
             category = Category.GENERAL
+        # The id is minted and CLAIMED here, before the report exists. Codex,
+        # spider-bot#3, 2026-09-04: the lock closes concurrent presses only
+        # while this process lives, and the marker was written AFTER filing —
+        # so a restart in between, or a failed marker write, left the button
+        # pointing at an unconsumed draft whose next press filed a second
+        # report. Claiming first makes the draft the record of intent: a
+        # restart finds it already claimed, and the id is stable, so filing
+        # again would overwrite one report rather than mint two.
+        report_id = ids.report_id()
+        claimed = await backing.append(
+            DRAFTS, self.draft_id, {**draft, "filed_report_id": report_id}
+        )
+        if not claimed:
+            await safe_followup(
+                interaction,
+                "I could not write that down just now — try again in a minute, "
+                "or use the buttons on `/home`.",
+                ephemeral=True,
+            )
+            return
         outcome = await service.file(
+            report_id=report_id,
             category=category,
             title=str(draft.get("title", ""))[:120],
             description=str(draft.get("description", ""))[:4000],
@@ -224,13 +245,13 @@ class ConfirmFiling(
                 message_id=draft.get("message_id"),
             ),
             correlation_id=str(draft.get("correlation_id", "")),
+            evidence_summary=tuple(
+                str(x) for x in (draft.get("evidence_summary") or [])
+            ),
+            evidence_format=str(draft.get("evidence_format", "")),
             # The offer panel says it before the member presses Save it.
             reporter_cleared=True,
         )
-        if outcome.ok and outcome.report is not None:
-            await backing.append(
-                DRAFTS, self.draft_id, {**draft, "filed_report_id": outcome.report.id}
-            )
         await safe_edit(
             interaction,
             content=None,
@@ -292,6 +313,40 @@ class DismissFiling(
             return
         await safe_edit(interaction, content="No problem.", embed=None, view=None)
         audit.stdout_event("intake_offer_declined", user=str(interaction.user))
+
+
+async def read_evidence(message) -> tuple[tuple[str, ...], str]:
+    """A run-evidence export attached to this message, reduced to summary lines.
+
+    The entry point the evidence reader never had. Codex, spider-bot#3,
+    2026-09-04: `evidence.parse` had no production caller at all — only tests,
+    the docs and the synthetic walkthrough — so the documented journey where a
+    tester attaches an export could not happen, and the JSON would have been
+    stored as ordinary truncated prose.
+
+    Bounded before it is read: the attachment's declared size is checked
+    against `evidence.MAX_BYTES` first, so an oversized file costs a comparison
+    rather than a download. Never raises: an unreadable attachment is simply
+    not evidence, and the report is still filed without it.
+    """
+    for attachment in getattr(message, "attachments", ()) or ():
+        name = (getattr(attachment, "filename", "") or "").lower()
+        if not name.endswith(".json"):
+            continue
+        if (getattr(attachment, "size", 0) or 0) > evidence.MAX_BYTES:
+            log.info("intake: evidence attachment %s is too large to read", name)
+            continue
+        try:
+            raw = await attachment.read()
+        except Exception:  # noqa: BLE001 — a download failure must not lose the report
+            log.info("intake: could not read evidence attachment %s", name)
+            continue
+        result = evidence.parse(raw)
+        if not result.ok:
+            log.info("intake: attachment %s is not run evidence: %s", name, result.reason)
+            continue
+        return tuple(result.summary_lines(redact.for_github)), evidence.SUPPORTED_FORMAT
+    return (), ""
 
 
 def build_offer(bot, draft_id: str, category: Category, title: str, description: str):
@@ -444,6 +499,7 @@ class IntakeCog(commands.Cog):
         self._last_offer[message.author.id] = now
 
         title, description = summarise(content)
+        evidence_summary, evidence_format = await read_evidence(message)
         draft_id = ids.report_id()
         backing = getattr(service, "_store", None)
         stored = backing is not None and await backing.append(
@@ -458,6 +514,8 @@ class IntakeCog(commands.Cog):
                 "message_id": message.id,
                 "correlation_id": ids.correlation_id(),
                 "created_at": now,
+                "evidence_summary": list(evidence_summary),
+                "evidence_format": evidence_format,
             },
         )
         if not stored:

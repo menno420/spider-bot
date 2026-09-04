@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 
 from spiderbot import audit, ids, store
 from spiderbot.ai import safety
@@ -32,6 +33,12 @@ from spiderbot.moderation import operations, prechecks
 from spiderbot.moderation.cases import Case, CaseStatus, Mode, ReviewOutcome, Source
 from spiderbot.moderation.contracts import MUTATING_OPERATIONS, Operation
 from spiderbot.moderation.policy import Policy
+
+#: How often ONE member's messages may reach the classifier, and how many
+#: classifier calls the whole server may make in an hour. Generous against real
+#: conversation in a small playtest server; far below what it takes to matter.
+SCAN_COOLDOWN_S = 20.0
+SCAN_HOURLY_CAP = 300
 
 log = logging.getLogger("spiderbot.moderation")
 
@@ -59,6 +66,9 @@ class ModerationService:
         # "enforce", so a misspelled mode does nothing rather than acting.
         self._executor = executor or operations.executor_for(str(self.mode))
         self._now = now
+        #: Per-member cooldown and a global hourly cap on classifier calls.
+        self._last_scan: dict[int, float] = {}
+        self._scan_times: deque[float] = deque(maxlen=SCAN_HOURLY_CAP * 2)
 
     @property
     def enforcing(self) -> bool:
@@ -79,6 +89,26 @@ class ModerationService:
         lines += self._policy.describe()
         return lines
 
+    def _within_budget(self, user_id: int) -> bool:
+        """Record this classification and say whether it is inside the budget.
+
+        Two brakes, because they answer different questions: a per-member
+        cooldown stops one person driving the classifier, and a global hourly
+        cap stops any number of people doing it together. Both count ATTEMPTS
+        at the model call, which is the thing being spent.
+        """
+        now = self._now()
+        if now - self._last_scan.get(user_id, 0.0) < SCAN_COOLDOWN_S:
+            return False
+        hour_ago = now - 3600
+        while self._scan_times and self._scan_times[0] <= hour_ago:
+            self._scan_times.popleft()
+        if len(self._scan_times) >= SCAN_HOURLY_CAP:
+            return False
+        self._last_scan[user_id] = now
+        self._scan_times.append(now)
+        return True
+
     # -- the pipeline ---------------------------------------------------------
 
     async def handle_message(self, message, *, bot_user_id: int | None) -> Case | None:
@@ -94,11 +124,26 @@ class ModerationService:
         if not precheck.proceed:
             return None
 
+        author = message.author
+        channel_name = prechecks.watched_name(getattr(message, "channel", None))
+        if not self._within_budget(getattr(author, "id", 0)):
+            # Codex, spider-bot#3, 2026-09-04: every qualifying message started
+            # an external classifier call with no per-member limit, no global
+            # budget and no concurrency bound anywhere in this path — so one
+            # member could open many simultaneous 20-second model requests AND
+            # write one case per result, spending the API budget and the
+            # store's fixed history even in shadow mode, where nothing is
+            # enforced. Armed BEFORE the call, for the reason this codebase has
+            # now measured four times: a brake that arms after the thing it
+            # protects is not a brake.
+            audit.stdout_event(
+                "moderation_skipped", reason="budget", channel=channel_name
+            )
+            return None
+
         correlation = ids.correlation_id()
         content = message.content or ""
-        channel_name = getattr(message.channel, "name", "") or ""
 
-        author = message.author
         # `speaker_label` rejects a display name carrying newlines, brackets or
         # a reserved role word and falls back to the pseudonym, so a member
         # cannot smuggle an instruction into the payload through their nickname.
@@ -269,7 +314,13 @@ class ModerationService:
             reviewed_at=self._now(),
             status=CaseStatus.REVIEWED,
         )
-        await self._store.append(store.CASES, reviewed.id, reviewed.as_record())
+        if not await self._store.append(store.CASES, reviewed.id, reviewed.as_record()):
+            # Codex, spider-bot#3, 2026-09-04: the write result was ignored, so
+            # `/case review` told the moderator it was marked while the review
+            # never reached the store — and the tally that is supposed to
+            # justify enabling enforcement quietly lost it.
+            log.error("moderation: review of %s could not be recorded", reviewed.id)
+            return None
         audit.stdout_event(
             "moderation_reviewed",
             case_id=reviewed.id,
@@ -319,6 +370,19 @@ class ModerationService:
         )
         if not verdict.allowed:
             case = case.with_(status=CaseStatus.REFUSED, refusal_reason=verdict.reason)
+        elif operation in MUTATING_OPERATIONS and not await self._store.append(
+            store.CASES, case.id, case.as_record()
+        ):
+            # The same prerequisite the autonomous path has. Codex,
+            # spider-bot#3, 2026-09-04: the pre-write covered `_resolve` only,
+            # so `/modact` could ban someone and then report a case id that
+            # `/case` cannot retrieve. A staff action is MORE in need of a
+            # record than an autonomous one, not less: it is the one with a
+            # person's name on it.
+            case = case.with_(
+                status=CaseStatus.REFUSED,
+                refusal_reason="the case could not be recorded, so nothing was done",
+            )
         else:
             # A staff action enforces even in shadow mode: shadow is about the
             # AUTONOMOUS path, not about disabling the moderators' own tools.

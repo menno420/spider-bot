@@ -117,7 +117,20 @@ def _receipt_embed(bot, verb: str, receipt: str) -> discord.Embed:
 #: receipt afterwards. `ComplaintModal` deliberately does not carry it: a
 #: complaint is never publishable at all, and telling someone their private
 #: message might be published would be false.
-PUBLIC_NOTICE = "Menno may put this on the game's public issue tracker."
+#: Kept SHORT on purpose: a placeholder is capped at `MAX_PLACEHOLDER` and a
+#: modal whose placeholder is one character over is refused by Discord as an
+#: invalid component — the form simply does not open. Codex, spider-bot#3,
+#: 2026-09-04: the first version of this notice pushed three placeholders to
+#: 118/114/112 characters and made all three publishable forms unopenable.
+#: `ComplaintModal` was at 104 BEFORE that change and had never opened at all.
+PUBLIC_NOTICE = "Menno may put this on the public tracker."
+
+#: Discord's own limits on a text input. Pinned by
+#: `tests/test_forms.py::test_every_modal_field_is_inside_discords_limits`,
+#: which walks every modal rather than the ones someone remembered.
+MAX_PLACEHOLDER = 100
+MAX_LABEL = 45
+MAX_MODAL_TITLE = 45
 
 
 class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
@@ -130,10 +143,7 @@ class FeedbackModal(discord.ui.Modal, title="Slingy Spider feedback"):
         label="Details",
         style=discord.TextStyle.paragraph,
         max_length=1500,
-        placeholder=(
-            "What happened / what you expected / device and Android version. "
-            + PUBLIC_NOTICE
-        ),
+        placeholder="What happened, and what you expected. " + PUBLIC_NOTICE,
     )
 
     def __init__(self, bot) -> None:
@@ -197,10 +207,7 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         style=discord.TextStyle.paragraph,
         max_length=800,
         required=False,
-        placeholder=(
-            "Smaller steps are better - it is how a bug gets reproduced. "
-            + PUBLIC_NOTICE
-        ),
+        placeholder="Small steps reproduce a bug best. " + PUBLIC_NOTICE,
     )
 
     def __init__(self, bot) -> None:
@@ -307,10 +314,7 @@ class IdeaModal(discord.ui.Modal, title="Share an idea"):
         label="What is the idea, and why?",
         style=discord.TextStyle.paragraph,
         max_length=1500,
-        placeholder=(
-            "What it would change, and what problem it solves for you. "
-            + PUBLIC_NOTICE
-        ),
+        placeholder="What it changes, and why. " + PUBLIC_NOTICE,
     )
 
     def __init__(self, bot) -> None:
@@ -369,10 +373,9 @@ class ComplaintModal(discord.ui.Modal, title="Tell Menno something"):
         label="What happened?",
         style=discord.TextStyle.paragraph,
         max_length=1500,
-        placeholder=(
-            "If this is about another member, say who and what they did. "
-            "Only Menno and the moderators will see this."
-        ),
+        # No PUBLIC_NOTICE here, deliberately: a complaint is never publishable,
+        # and telling someone their private message might be published is false.
+        placeholder="Say who and what happened. Only staff see this.",
     )
 
     def __init__(self, bot) -> None:
