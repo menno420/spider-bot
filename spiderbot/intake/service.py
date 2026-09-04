@@ -249,9 +249,16 @@ class IntakeService:
         """
         base = f"Saved. Your reference is `{report.id}`."
         if report.sensitivity is Sensitivity.PUBLIC_SAFE:
+            # Codex, spider-bot#5: this said "the game's issue tracker" for a
+            # report about the bot, which goes to Spider Bot's own.
+            tracker = (
+                "Spider Bot's own issue tracker"
+                if report.target is Target.BOT
+                else "the game's issue tracker"
+            )
             return (
-                f"{base} Menno will see it, and he may put it on the game's "
-                "issue tracker so it does not get lost."
+                f"{base} Menno will see it, and he may put it on {tracker} "
+                "so it does not get lost."
             )
         return (
             f"{base} This one stays private — only Menno and the moderators "
@@ -483,7 +490,9 @@ class IntakeService:
         """
         outcomes = []
         queue = sorted(await self.pending_publication(), key=lambda r: r.submitted_at)
-        for report in queue[:limit]:
+        for report in queue:
+            if len(outcomes) >= limit:
+                break
             if not self.client_for(report).available:
                 # Two trackers: the loop runs when EITHER is reachable, so a
                 # report whose own tracker is not must be left queued rather
@@ -491,7 +500,10 @@ class IntakeService:
                 # `publish_failed` generation against a client that cannot
                 # become available without a redeploy, every pass, and those
                 # writes eat the store's fixed horizon (Codex, spider-bot#3,
-                # round 2 — the same hole, one tracker later).
+                # round 2 — the same hole, one tracker later). And the limit
+                # counts ATTEMPTS, not queue positions: Codex, spider-bot#5 —
+                # slicing the queue first meant ten skipped bot reports at the
+                # front starved every newer game report for ever.
                 continue
             outcomes.append(await self.publish(report.id))
         return outcomes

@@ -59,6 +59,28 @@ DRAFTS = "intake_drafts"
 #: only whether to OFFER, and the person decides everything after that. A false
 #: offer costs one dismissable message; a missed one costs a lost report, so
 #: the bar is set low on purpose.
+#: A problem with the bot itself, said in chat. Two patterns that must BOTH
+#: match — the subject is the bot, and something is wrong — checked before
+#: `SIGNALS`, because the first bug rule matches "doesn't work" on its own and
+#: would offer a game bug for "the Spider Bot button doesn't work". Codex,
+#: spider-bot#5: that draft, once approved, could only ever be published to the
+#: game's tracker — the cross-tracker path the routing exists to close. This
+#: still decides only what is OFFERED; the member confirms the category, and
+#: `Report.target` reads the category, never the text.
+BOT_SUBJECT = re.compile(
+    # `(?<![\w/])` rather than `\b`: a word boundary cannot precede a slash,
+    # so `\b/tester` never matched a command name at the start of a message.
+    r"(?<![\w/])(spider ?bot|the bot|bot'?s|/(?:home|report|publish|jointest|tester)|"
+    r"the panel|home panel)(?!\w)",
+    re.IGNORECASE,
+)
+BOT_TROUBLE = re.compile(
+    r"\b(does(?:n'?t| not) work|didn'?t work|isn'?t working|not working|broken|"
+    r"nothing happen(?:s|ed)|no response|not respond(?:ing)?|ignores? me|"
+    r"error|failed|timed out|stuck)\b",
+    re.IGNORECASE,
+)
+
 SIGNALS: tuple[tuple[re.Pattern[str], Category], ...] = (
     (
         re.compile(
@@ -120,6 +142,8 @@ def detect(text: str) -> Category | None:
     """The likely category, or None. Deterministic; no model call."""
     if len(text.strip()) < MIN_LENGTH:
         return None
+    if BOT_SUBJECT.search(text) and BOT_TROUBLE.search(text):
+        return Category.BOT_PROBLEM
     for pattern, category in SIGNALS:
         if pattern.search(text):
             return category

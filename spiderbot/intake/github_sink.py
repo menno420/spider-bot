@@ -93,8 +93,13 @@ class GitHubClient(Protocol):
 class NullGitHubClient:
     """No credential configured. Fail-closed, and say which setting is missing."""
 
-    def __init__(self, reason: str = "GITHUB_TOKEN is not set") -> None:
+    def __init__(self, reason: str = "GITHUB_TOKEN is not set", *, repo: str = "") -> None:
         self._reason = reason
+        #: The repository this client WOULD post to. Codex, spider-bot#5: with
+        #: publication off, `/publish` showed "(no repository configured)" for a
+        #: destination that was configured — exactly when someone is checking
+        #: readiness. A refusal and a destination are different facts.
+        self._repo = repo
 
     @property
     def available(self) -> bool:
@@ -102,13 +107,27 @@ class NullGitHubClient:
 
     @property
     def repo(self) -> str:
-        return ""
+        return self._repo
 
     async def find_issue_by_marker(self, marker: str) -> Published | None:
         return None
 
     async def create_issue(self, title, body, labels) -> PublishResult:
         return PublishFailure("no_credential", self._reason, retryable=True)
+
+
+def client_for_settings(
+    token: str | None, repo: str, *, publish_enabled: bool
+) -> GitHubClient:
+    """The client for one repository under the two locks, or a refusal that
+    names the missing lock AND the destination it guards."""
+    if not publish_enabled:
+        return NullGitHubClient("INTAKE_PUBLISH_ENABLED is false", repo=repo)
+    if not token:
+        return NullGitHubClient("GITHUB_TOKEN is not set", repo=repo)
+    if not repo:
+        return NullGitHubClient("no repository configured")
+    return HttpGitHubClient(token, repo)
 
 
 class HttpGitHubClient:

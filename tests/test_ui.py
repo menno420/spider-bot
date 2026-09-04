@@ -541,3 +541,45 @@ def test_no_sub_panel_is_a_dead_end():
 def test_home_itself_has_no_back_button():
     # Home is the root. A Back there would go nowhere.
     assert not any(isinstance(c, BackButton) for c in panel_for(build(), member()).children)
+
+
+def test_reports_panel_shows_what_a_retry_can_never_fix():
+    """Codex, spider-bot#5: a permanent publish failure left both queues and
+    the panel never asked `stuck()`, so the one report that needed a person
+    was an undifferentiated line among the latest twelve, then aged out."""
+    from spiderbot import store
+    from spiderbot.intake import github_sink
+    from spiderbot.intake import service as intake_service
+    from spiderbot.intake.models import Category
+
+    class NoAccess:
+        available = True
+        repo = "menno420/spider-bot"
+
+        async def find_issue_by_marker(self, marker):
+            return None
+
+        async def create_issue(self, title, body, labels):
+            return github_sink.PublishFailure(
+                "not_found_or_no_access", "HTTP 404 for menno420/spider-bot", retryable=False
+            )
+
+    svc = intake_service.IntakeService(store.InMemoryStore(), bot_github=NoAccess())
+    filed = asyncio.run(svc.file(
+        category=Category.BOT_PROBLEM, title="Reports button did nothing",
+        description="pressed it, nothing happened", reporter_cleared=True,
+    ))
+    asyncio.run(svc.approve(filed.report.id, by="menno"))
+    asyncio.run(svc.publish(filed.report.id))
+    assert asyncio.run(svc.pending_publication()) == []  # a retry will not touch it
+    bot = build()
+    bot.intake = svc
+    home = panel_for(bot, member(mod=True))
+    interaction = FakeInteraction(FakeGuild(), user=member(mod=True))
+    asyncio.run(home._do_reports(interaction))
+    # `for_discord` escapes markdown, so the reason reads `not\_found…` on the
+    # wire; strip the escapes before matching on the words.
+    shown = texts(interaction).replace("\\", "")
+    assert "Stuck" in shown and "1** stuck" in shown
+    assert filed.report.id in shown
+    assert "not_found_or_no_access" in shown

@@ -436,6 +436,79 @@ def test_the_retry_loop_leaves_a_report_alone_when_its_own_tracker_is_unreachabl
     assert game.created and game.created[0][0] == "[Bug] g"
 
 
+def test_the_retry_limit_counts_attempts_so_skipped_reports_cannot_starve_the_rest():
+    """Codex, spider-bot#5: slicing the queue to `limit` BEFORE the
+    availability check let ten old bot reports with no bot tracker starve every
+    newer game report for ever."""
+    game = FakeGitHub()
+    svc = intake_service.IntakeService(store.InMemoryStore(), game)
+    for n in range(12):
+        file_and_approve(
+            svc, category=Category.BOT_PROBLEM, title=f"bot {n}", description="nothing happened",
+            reporter=Reporter(user_id=1000 + n),
+        )
+    newest = file_and_approve(
+        svc, category=Category.BUG, title="game", description="froze", reporter=Reporter(user_id=7)
+    )
+    outcomes = run(svc.retry_pending(limit=10))
+    assert [o.report.id for o in outcomes] == [newest.report.id]
+    assert [t for t, _b, _l in game.created] == ["[Bug] game"]
+
+
+def test_a_refusing_client_still_names_its_destination():
+    """Codex, spider-bot#5: with publication off, `/publish` said
+    "(no repository configured)" for a destination that WAS configured."""
+    off = github_sink.client_for_settings("tok", "o/game", publish_enabled=False)
+    assert not off.available and off.repo == "o/game"
+    no_token = github_sink.client_for_settings(None, "o/bot", publish_enabled=True)
+    assert not no_token.available and no_token.repo == "o/bot"
+    no_repo = github_sink.client_for_settings("tok", "", publish_enabled=True)
+    assert not no_repo.available and no_repo.repo == ""
+    live = github_sink.client_for_settings("tok", "o/game", publish_enabled=True)
+    assert live.available and live.repo == "o/game"
+    game_off = github_sink.client_for_settings(None, "menno420/spider-swing", publish_enabled=False)
+    bot_off = github_sink.client_for_settings(None, "menno420/spider-bot", publish_enabled=False)
+    svc = intake_service.IntakeService(store.InMemoryStore(), game_off, bot_github=bot_off)
+    assert svc.repo_for(a_report(category=Category.BUG)) == "menno420/spider-swing"
+    assert svc.repo_for(a_report(category=Category.BOT_PROBLEM)) == "menno420/spider-bot"
+    assert not svc.can_publish
+
+
+def test_the_receipt_names_the_tracker_the_report_can_reach():
+    """Codex, spider-bot#5: a member filing a bot problem was told Menno may
+    put it on "the game's issue tracker"."""
+    svc = a_service()
+    about_bot = run(svc.file(
+        category=Category.BOT_PROBLEM, title="t", description="the Reports button did nothing",
+        reporter_cleared=True,
+    ))
+    about_game = run(svc.file(
+        category=Category.BUG, title="t", description="the game froze on release",
+        reporter_cleared=True,
+    ))
+    assert "Spider Bot's own issue tracker" in about_bot.reporter_message
+    assert "game's" not in about_bot.reporter_message
+    assert "the game's issue tracker" in about_game.reporter_message
+
+
+def test_a_bot_problem_said_in_chat_is_offered_as_a_bot_problem():
+    """Codex, spider-bot#5 (P1): "the Spider Bot button doesn't work" matched
+    the first bug rule and was stored as a game BUG — and a game bug can only
+    ever be published to the game's tracker. The offer now proposes the bot
+    category; the member still confirms, and `Report.target` still reads the
+    category, never the text."""
+    detect = intake_cog.detect
+    bot = Category.BOT_PROBLEM
+    assert detect("The Spider Bot button in /home doesn't work for me") is bot
+    assert detect("I pressed Reports on the home panel and nothing happened") is bot
+    assert detect("/tester count gives an error every time I try it") is bot
+    # The game is still the game.
+    assert detect("the game froze when I released the silk near 3 km") is Category.BUG
+    assert detect("found a bug: the bird clips through the wall") is Category.BUG
+    # Mentioning the bot without a problem is not a report.
+    assert detect("the bot said the game is really hard, and it is right") is None
+
+
 def test_repo_for_names_the_tracker_the_human_is_about_to_publish_to():
     game = github_sink.HttpGitHubClient("t", "menno420/spider-swing")
     bot = github_sink.HttpGitHubClient("t", "menno420/spider-bot")

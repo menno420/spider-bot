@@ -208,14 +208,9 @@ class SpiderBot(commands.Bot):
 
     def _github_client(self, repo: str) -> github_sink.GitHubClient:
         """A client for one repository, or a refusal that names the missing lock."""
-        cfg = self.cfg
-        if not cfg.intake_publish_enabled:
-            return github_sink.NullGitHubClient("INTAKE_PUBLISH_ENABLED is false")
-        if not cfg.github_token:
-            return github_sink.NullGitHubClient("GITHUB_TOKEN is not set")
-        if not repo:
-            return github_sink.NullGitHubClient("no repository configured")
-        return github_sink.HttpGitHubClient(cfg.github_token, repo)
+        return github_sink.client_for_settings(
+            self.cfg.github_token, repo, publish_enabled=self.cfg.intake_publish_enabled
+        )
 
     def _build_services(self) -> None:
         """Assemble intake and moderation from whatever is actually configured.
