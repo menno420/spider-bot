@@ -27,6 +27,7 @@ _EXTENSIONS = (
     "spiderbot.cogs.chat",
     "spiderbot.cogs.home",
     "spiderbot.cogs.membership",
+    "spiderbot.cogs.serverlog",
     "spiderbot.cogs.moderation",
     "spiderbot.cogs.intake",
 )
@@ -37,6 +38,10 @@ class SpiderBot(commands.Bot):
         intents = discord.Intents.default()
         intents.members = True  # welcome-on-join (portal intent enabled)
         intents.message_content = True  # AI initiative (owner-approved 2026-08-24)
+        # Ban/unban and audit-log-entry events, for server logging. NOT a
+        # privileged intent (discord/flags.py:913-926), so it needs no portal
+        # change - it only widens what the gateway sends us.
+        intents.moderation = True
         super().__init__(
             command_prefix=commands.when_mentioned,
             intents=intents,

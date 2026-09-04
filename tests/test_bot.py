@@ -54,6 +54,7 @@ def test_every_extension_loads_without_a_connection():
         "MembershipCog",
         "ModerationCog",
         "RosterCog",
+        "ServerLogCog",
     ]
 
 
