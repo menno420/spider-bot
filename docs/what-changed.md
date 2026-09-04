@@ -24,9 +24,10 @@ channel, as a normal reply — to write it down. They press **Save it** and get 
 reference like `SB-R-M1PB8V6G-KT0GBA`. That reference is real: they can ask for
 their own reports later from `/home`.
 
-**Report on purpose.** `/report` gives four routes: a bug, an idea, how the
-game feels, and *something private*. The private one never goes anywhere public
-at all.
+**Report on purpose.** `/report` gives five routes: a bug, an idea, how the
+game feels, *a problem with Spider Bot*, and *something private*. The private
+one never goes anywhere public at all. A problem with the bot goes to the bot's
+own tracker (`menno420/spider-bot`), never the game's — your call, 2026-09-04.
 
 **See where it went.** `/home` → *My reports* lists what a member has filed and
 what happened to each one.
@@ -41,7 +42,8 @@ first, with the ones waiting on you at the top.
 
 **`/publish <id>` — and it shows you the issue first.** This is the important
 one. When you publish a report, the bot renders the exact title and the exact
-body that would go on `menno420/spider-swing`, plus the labels, and asks you to
+body that would go on the tracker — `menno420/spider-swing` for the game,
+`menno420/spider-bot` for a problem with the bot — plus the labels, and asks you to
 confirm. You read the real text before it exists anywhere public. Nothing
 publishes without that press.
 
@@ -124,7 +126,7 @@ Nothing here is required to merge. Each line buys one capability.
 |---|---|---|
 | Durable reports | Create a **private** channel `#intake-state` the bot can read and write | Intake is off and every panel says so |
 | Moderation cases | Create a **private** channel `#case-state`, same permissions | Moderation cannot record and stays off |
-| Reports reaching GitHub | Set `GITHUB_TOKEN` in Railway to a **fine-grained** token scoped to `menno420/spider-swing` only, with Issues: read & write and nothing else, then set `INTAKE_PUBLISH_ENABLED=true` | Reports are stored and queued; the bot says plainly that it could not file them |
+| Reports reaching GitHub | Set `GITHUB_TOKEN` in Railway to a **fine-grained** token scoped to `menno420/spider-swing` **and** `menno420/spider-bot`, with Issues: read & write and nothing else, then set `INTAKE_PUBLISH_ENABLED=true` | Reports are stored and queued; the bot says plainly that it could not file them |
 | Moderation watching | Set `MOD_WATCH_CHANNELS` and `MOD_MODE=shadow` | Nothing is judged |
 | Current game facts | Merge `menno420/spider-swing#181` and set `SUPPORT_FEED_URL` | The bot answers from a static block and says so |
 

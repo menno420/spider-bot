@@ -83,21 +83,44 @@ def receipt_for(outcome, fallback: str) -> str:
 
 
 async def _deliver(bot, channel_key: str, title: str, body: str, author) -> str:
-    """Post a report to its forum, or fall back to #mod-log. Returns a receipt."""
+    """Post a report to its forum, or fall back to #mod-log. Returns a receipt.
+
+    Never raises. Codex, spider-bot#5 round 2: a forum `create_thread` that
+    fails (Create Public Threads removed, Discord down) propagated AFTER the
+    report was durably stored, so the member — whose interaction was already
+    deferred — got no receipt and no reference, and filed it again.
+    """
     target = bot.channels.get(channel_key)
-    if isinstance(target, discord.ForumChannel):
-        created = await target.create_thread(
-            name=title[:95], content=body[:1900], allowed_mentions=NO_MENTIONS
-        )
-        return f"Thank you! It is posted here: {created.thread.mention}"
-    if target is not None:
-        await target.send(f"**{title}**\n{body}"[:1900], allowed_mentions=NO_MENTIONS)
-        return "Thank you! Your report reached the team."
+    failed = False
+    try:
+        if isinstance(target, discord.ForumChannel):
+            created = await target.create_thread(
+                name=title[:95], content=body[:1900], allowed_mentions=NO_MENTIONS
+            )
+            return f"Thank you! It is posted here: {created.thread.mention}"
+        if target is not None:
+            await target.send(f"**{title}**\n{body}"[:1900], allowed_mentions=NO_MENTIONS)
+            return "Thank you! Your report reached the team."
+    except discord.DiscordException as exc:
+        log.warning("delivery to #%s failed (%s); falling back to #mod-log", channel_key, exc)
+        failed = True
     fallback = bot.channels.get("mod-log")
     if fallback is not None:
-        await fallback.send(
-            f"From {getattr(author, 'display_name', author)}: **{title}**\n{body}"[:1900],
-            allowed_mentions=NO_MENTIONS,
+        try:
+            await fallback.send(
+                f"From {getattr(author, 'display_name', author)}: **{title}**\n{body}"[:1900],
+                allowed_mentions=NO_MENTIONS,
+            )
+            return "Thank you! Your report reached the team."
+        except discord.DiscordException as exc:
+            log.warning("fallback delivery to #mod-log failed too (%s)", exc)
+            failed = True
+    if failed:
+        # Gemini (free-key review of round 2, 2026-09-04): with the target
+        # failed and no #mod-log at all, this said "reached the team".
+        return (
+            "Thank you! It is saved; posting it to the team's channel failed, "
+            "so they will see it in the queue."
         )
     return "Thank you! Your report reached the team."
 
@@ -250,6 +273,75 @@ class BugReportModal(discord.ui.Modal, title="Report a bug"):
         )
         audit.stdout_event(
             "bug_submitted",
+            user=str(interaction.user),
+            report_id=getattr(getattr(outcome, "report", None), "id", None),
+        )
+
+
+class BotProblemModal(discord.ui.Modal, title="Report a problem with Spider Bot"):
+    """A problem with the bot itself — routed to spider-bot's own tracker.
+
+    Owner, 2026-09-04: "the panel button did nothing" is not a game issue, and
+    it does not belong on the game's tracker. Its own form rather than a flag
+    on the bug form, because the category is set by the form the member chose
+    and never inferred from what they typed (`Report.target`).
+    """
+
+    summary = discord.ui.TextInput(
+        label="One-line summary",
+        max_length=90,
+        placeholder="e.g. The Reports button in /home did nothing",
+    )
+    details = discord.ui.TextInput(
+        label="What happened, and what you expected",
+        style=discord.TextStyle.paragraph,
+        max_length=1200,
+    )
+    steps = discord.ui.TextInput(
+        label="What you pressed or typed just before",
+        style=discord.TextStyle.paragraph,
+        max_length=800,
+        required=False,
+        placeholder="The command or button, in order. " + PUBLIC_NOTICE,
+    )
+
+    def __init__(self, bot) -> None:
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not await safe_defer(interaction, ephemeral=True):
+            return
+        steps = str(self.steps.value or "").strip() or "(not given)"
+        body = (
+            f"**What happened**\n{self.details.value}\n\n"
+            f"**Just before it**\n{steps}\n\n"
+            f"*Reported by {interaction.user.display_name} via the bot-problem form*"
+        )
+        outcome = await file_report(
+            self.bot,
+            interaction,
+            category=Category.BOT_PROBLEM,
+            title=str(self.summary.value),
+            description=str(self.details.value),
+            repro_steps=steps,
+        )
+        receipt = await _deliver(
+            self.bot,
+            "bug-reports",
+            f"[Spider Bot] {self.summary.value}",
+            body,
+            interaction.user,
+        )
+        await safe_followup(
+            interaction,
+            embed=_receipt_embed(
+                self.bot, "Bot problem reported", receipt_for(outcome, receipt)
+            ),
+            ephemeral=True,
+        )
+        audit.stdout_event(
+            "bot_problem_submitted",
             user=str(interaction.user),
             report_id=getattr(getattr(outcome, "report", None), "id", None),
         )

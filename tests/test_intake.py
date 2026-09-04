@@ -23,7 +23,14 @@ from spiderbot import redact, store
 from spiderbot.cogs import intake as intake_cog
 from spiderbot.intake import github_sink, privacy
 from spiderbot.intake import service as intake_service
-from spiderbot.intake.models import Category, Report, Reporter, Sensitivity, Status
+from spiderbot.intake.models import (
+    Category,
+    Report,
+    Reporter,
+    Sensitivity,
+    Status,
+    Target,
+)
 
 TICKS = "`" * 3
 
@@ -75,8 +82,11 @@ def file_and_approve(svc, **kw):
 class FakeGitHub:
     """A GitHub that can be made to fail, and that records every create."""
 
-    def __init__(self, *, fail: github_sink.PublishFailure | None = None) -> None:
+    def __init__(
+        self, *, fail: github_sink.PublishFailure | None = None, repo: str = "example/fake"
+    ) -> None:
         self.fail = fail
+        self.repo = repo
         self.created: list[tuple[str, str, list[str]]] = []
         self.searches: list[str] = []
         self.next_number = 100
@@ -354,9 +364,281 @@ def test_a_fence_in_member_text_cannot_swallow_the_rest_of_the_issue():
     assert "Intake id" in body, "the footer must still be visible"
 
 
+# -- which tracker ------------------------------------------------------------
+
+
+def test_the_target_is_decided_by_the_category_alone():
+    """Owner, 2026-09-04: reports about the bot go to spider-bot's own tracker.
+    The category decides; the text never does — a game report that SAYS "the
+    bot" is still a game report."""
+    for category in Category:
+        expected = Target.BOT if category is Category.BOT_PROBLEM else Target.GAME
+        assert a_report(category=category).target is expected, category
+    assert a_report(description="the bot's panel button did nothing").target is Target.GAME
+
+
+def test_a_report_about_the_bot_is_published_to_the_bots_tracker_never_the_games():
+    game, bot = FakeGitHub(repo="o/game"), FakeGitHub(repo="o/bot")
+    svc = intake_service.IntakeService(store.InMemoryStore(), game, bot_github=bot)
+    assert svc.repo_for(a_report(category=Category.BOT_PROBLEM)) == "o/bot"
+    assert svc.repo_for(a_report(category=Category.BUG)) == "o/game"
+    about_bot = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="Reports button did nothing",
+        description="Pressed Reports in /home and nothing happened.",
+    )
+    about_game = file_and_approve(
+        svc, category=Category.BUG, title="Freeze", description="The game froze.",
+    )
+    assert run(svc.publish(about_bot.report.id)).published
+    assert run(svc.publish(about_game.report.id)).published
+    assert [t for t, _b, _l in bot.created] == ["[Bot problem] Reports button did nothing"]
+    assert [t for t, _b, _l in game.created] == ["[Bug] Freeze"]
+    # The idempotency search happens on the tracker the report belongs to.
+    assert bot.searches and all(about_bot.report.id in s for s in bot.searches)
+
+
+def test_a_bot_report_with_no_bot_tracker_is_refused_by_name_and_never_sent_to_the_game():
+    """Fail closed in the direction that matters: a missing bot tracker must
+    not quietly route a bot report onto the game's public tracker."""
+    game = FakeGitHub()
+    svc = intake_service.IntakeService(store.InMemoryStore(), game)
+    out = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="t", description="the panel did nothing",
+    )
+    result = run(svc.publish(out.report.id))
+    assert not result.published
+    assert result.report.status is Status.PUBLISH_FAILED
+    assert result.report.publish_failure == "no_credential"
+    assert result.report.publish_failure_retryable
+    assert game.created == [] and game.searches == []
+    assert svc.repo_for(out.report) == "(no repository configured)"
+    # The service CAN publish — the game tracker is reachable — and the bot
+    # report is still refused: reachability of the other tracker is not consent.
+    assert svc.can_publish
+
+
+def test_the_retry_loop_leaves_a_report_alone_when_its_own_tracker_is_unreachable():
+    """The loop runs when EITHER tracker is reachable. A bot report with no bot
+    tracker must be skipped, not attempted: an attempt writes two store
+    generations per pass against a client that cannot change without a
+    redeploy — the hole Codex round 2 closed for one tracker, reopened for two."""
+    game = FakeGitHub()
+    svc = intake_service.IntakeService(store.InMemoryStore(), game)
+    about_bot = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="t", description="the panel did nothing",
+    )
+    about_game = file_and_approve(svc, category=Category.BUG, title="g", description="froze")
+    before = run(svc.get(about_bot.report.id))
+    outcomes = run(svc.retry_pending())
+    assert [o.report.id for o in outcomes] == [about_game.report.id]
+    assert run(svc.get(about_bot.report.id)) == before  # no generation written
+    assert run(svc.get(about_bot.report.id)).status is not Status.PUBLISH_FAILED
+    assert game.created and game.created[0][0] == "[Bug] g"
+
+
+def test_the_retry_limit_counts_attempts_so_skipped_reports_cannot_starve_the_rest():
+    """Codex, spider-bot#5: slicing the queue to `limit` BEFORE the
+    availability check let ten old bot reports with no bot tracker starve every
+    newer game report for ever."""
+    game = FakeGitHub()
+    svc = intake_service.IntakeService(store.InMemoryStore(), game)
+    for n in range(12):
+        file_and_approve(
+            svc, category=Category.BOT_PROBLEM, title=f"bot {n}", description="nothing happened",
+            reporter=Reporter(user_id=1000 + n),
+        )
+    newest = file_and_approve(
+        svc, category=Category.BUG, title="game", description="froze", reporter=Reporter(user_id=7)
+    )
+    outcomes = run(svc.retry_pending(limit=10))
+    assert [o.report.id for o in outcomes] == [newest.report.id]
+    assert [t for t, _b, _l in game.created] == ["[Bug] game"]
+
+
+def test_a_refusing_client_still_names_its_destination():
+    """Codex, spider-bot#5: with publication off, `/publish` said
+    "(no repository configured)" for a destination that WAS configured."""
+    off = github_sink.client_for_settings("tok", "o/game", publish_enabled=False)
+    assert not off.available and off.repo == "o/game"
+    no_token = github_sink.client_for_settings(None, "o/bot", publish_enabled=True)
+    assert not no_token.available and no_token.repo == "o/bot"
+    no_repo = github_sink.client_for_settings("tok", "", publish_enabled=True)
+    assert not no_repo.available and no_repo.repo == ""
+    live = github_sink.client_for_settings("tok", "o/game", publish_enabled=True)
+    assert live.available and live.repo == "o/game"
+    game_off = github_sink.client_for_settings(None, "menno420/spider-swing", publish_enabled=False)
+    bot_off = github_sink.client_for_settings(None, "menno420/spider-bot", publish_enabled=False)
+    svc = intake_service.IntakeService(store.InMemoryStore(), game_off, bot_github=bot_off)
+    assert svc.repo_for(a_report(category=Category.BUG)) == "menno420/spider-swing"
+    assert svc.repo_for(a_report(category=Category.BOT_PROBLEM)) == "menno420/spider-bot"
+    assert not svc.can_publish
+
+
+def test_the_receipt_names_the_tracker_the_report_can_reach():
+    """Codex, spider-bot#5: a member filing a bot problem was told Menno may
+    put it on "the game's issue tracker"."""
+    svc = a_service()
+    about_bot = run(svc.file(
+        category=Category.BOT_PROBLEM, title="t", description="the Reports button did nothing",
+        reporter_cleared=True,
+    ))
+    about_game = run(svc.file(
+        category=Category.BUG, title="t", description="the game froze on release",
+        reporter_cleared=True,
+    ))
+    assert "Spider Bot's own issue tracker" in about_bot.reporter_message
+    assert "game's" not in about_bot.reporter_message
+    assert "the game's issue tracker" in about_game.reporter_message
+
+
+def test_a_bot_problem_said_in_chat_is_offered_as_a_bot_problem():
+    """Codex, spider-bot#5 (P1): "the Spider Bot button doesn't work" matched
+    the first bug rule and was stored as a game BUG — and a game bug can only
+    ever be published to the game's tracker. The offer now proposes the bot
+    category; the member still confirms, and `Report.target` still reads the
+    category, never the text."""
+    detect = intake_cog.detect
+    bot = Category.BOT_PROBLEM
+    assert detect("The Spider Bot button in /home doesn't work for me") is bot
+    assert detect("I pressed Reports on the home panel and nothing happened") is bot
+    assert detect("/tester count gives an error every time I try it") is bot
+    # The game is still the game.
+    assert detect("the game froze when I released the silk near 3 km") is Category.BUG
+    assert detect("found a bug: the bird clips through the wall") is Category.BUG
+    # Mentioning the bot without a problem is not a report.
+    assert detect("the bot said the game is really hard, and it is right") is None
+
+
+def test_the_subject_and_the_trouble_must_share_a_clause_and_the_game_wins_it():
+    """Codex, spider-bot#5 round 2, two P1s: two whole-message searches let a
+    game report that mentions the bot in passing read as a bot problem, and
+    the trouble vocabulary lacked `crash`, so "Spider Bot crashes when I use
+    /report" fell through to the game bug rule."""
+    detect = intake_cog.detect
+    assert detect("I asked the bot for help because the game doesn't work anymore") is Category.BUG
+    assert detect("the bot said the game is broken and it is right about that") is Category.BUG
+    assert detect("Spider Bot crashes when I use /report on my phone") is Category.BOT_PROBLEM
+    # Gemini (free-key review of round 2): the hyphenated spelling matched
+    # neither the bot subject nor the game exclusion's lookahead.
+    assert detect("the spider-bot is broken, nothing happens on /home") is Category.BOT_PROBLEM
+    assert detect("the spider fell through the floor and the game froze") is Category.BUG
+    assert detect("the home panel froze after I pressed Reports twice") is Category.BOT_PROBLEM
+    # A sentence naming BOTH stays a game report — the safer default, since a
+    # wrongly-confirmed bot offer would route a game defect to the bot tracker.
+    assert detect("the game froze, then I asked the bot and it did not respond") is Category.BUG
+
+
+def test_the_offer_names_the_tracker_the_category_can_reach():
+    """Codex, spider-bot#5 round 2 (P1): pressing Save it recorded consent for
+    "the game's public issue tracker" on a report that can only reach the
+    bot's."""
+    from conftest import FakeAI, FakeBot, make_cfg
+
+    bot = FakeBot(make_cfg(), FakeAI())
+    offer = intake_cog.build_offer
+    embed, _view = offer(bot, "SB-D-TEST0001-AAAAAA", Category.BOT_PROBLEM, "t", "d")
+    assert "Spider Bot's own public issue tracker" in embed.description
+    assert "game's" not in embed.description
+    embed, _view = intake_cog.build_offer(bot, "SB-D-TEST0002-AAAAAA", Category.BUG, "t", "d")
+    assert "the game's public issue tracker" in embed.description
+
+
+def test_the_trackers_take_turns_so_one_failing_tracker_cannot_consume_the_pass():
+    """Codex, spider-bot#5 round 2: `limit` oldest reports retrying against one
+    tracker's repeated retryable 403 consumed every pass; the healthy tracker's
+    newer report was never attempted."""
+    game = FakeGitHub(fail=github_sink.PublishFailure("forbidden_or_rate_limited", retryable=True))
+    bot = FakeGitHub()
+    svc = intake_service.IntakeService(store.InMemoryStore(), game, bot_github=bot)
+    for n in range(12):
+        file_and_approve(
+            svc, category=Category.BUG, title=f"game {n}", description="froze",
+            reporter=Reporter(user_id=2000 + n),
+        )
+    newest = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="bot", description="nothing happened",
+        reporter=Reporter(user_id=9),
+    )
+    outcomes = run(svc.retry_pending(limit=10))
+    assert len(outcomes) == 10
+    assert newest.report.id in [o.report.id for o in outcomes]
+    assert [t for t, _b, _l in bot.created] == ["[Bot problem] bot"]
+
+
+def test_a_person_can_publish_a_stuck_report_again_once_the_cause_is_fixed():
+    """Codex, spider-bot#5: `may_publish` refused a permanently failed report
+    for ever, so nothing — not even `/publish` after fixing the token — could
+    act on what the panel now shows. A person's approval clears it; the
+    scheduled loop never does."""
+    class NoAccess(FakeGitHub):
+        async def create_issue(self, title, body, labels):
+            return github_sink.PublishFailure("not_found_or_no_access", "404", retryable=False)
+
+    broken = NoAccess()
+    svc = intake_service.IntakeService(store.InMemoryStore(), bot_github=broken)
+    out = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="t", description="nothing happened"
+    )
+    assert not run(svc.publish(out.report.id)).published
+    assert run(svc.retry_pending()) == []  # the loop leaves it alone
+    assert [r.id for r in run(svc.stuck())] == [out.report.id]
+    # The owner fixes the token; the same client object now works.
+    broken.__class__ = FakeGitHub
+    again = run(svc.approve(out.report.id, by="menno"))  # what /publish's confirm does
+    assert again.publish_failure_retryable and again.may_publish
+    assert run(svc.publish(out.report.id)).published
+    assert run(svc.stuck()) == []
+
+
+def test_a_resolved_report_is_no_longer_stuck():
+    class NoAccess(FakeGitHub):
+        async def create_issue(self, title, body, labels):
+            return github_sink.PublishFailure("not_found_or_no_access", "404", retryable=False)
+
+    svc = intake_service.IntakeService(store.InMemoryStore(), bot_github=NoAccess())
+    out = file_and_approve(
+        svc, category=Category.BOT_PROBLEM, title="t", description="nothing happened"
+    )
+    run(svc.publish(out.report.id))
+    assert [r.id for r in run(svc.stuck())] == [out.report.id]
+    run(svc.mark_resolved(out.report.id, "handled by hand"))
+    assert run(svc.stuck()) == []
+
+
+def test_repo_for_names_the_tracker_the_human_is_about_to_publish_to():
+    game = github_sink.HttpGitHubClient("t", "menno420/spider-swing")
+    bot = github_sink.HttpGitHubClient("t", "menno420/spider-bot")
+    svc = intake_service.IntakeService(store.InMemoryStore(), game, bot_github=bot)
+    assert svc.repo_for(a_report(category=Category.BUG)) == "menno420/spider-swing"
+    assert svc.repo_for(a_report(category=Category.BOT_PROBLEM)) == "menno420/spider-bot"
+    assert svc.can_publish
+
+
+def test_can_publish_is_true_when_either_tracker_is_reachable():
+    only_bot = intake_service.IntakeService(
+        store.InMemoryStore(), None, bot_github=github_sink.HttpGitHubClient("t", "o/r")
+    )
+    assert only_bot.can_publish
+    neither = intake_service.IntakeService(store.InMemoryStore(), None)
+    assert not neither.can_publish
+
+
+def test_an_ordinary_bot_problem_is_publishable():
+    """The positive control for the new category, mirroring the game one."""
+    report = a_report(
+        category=Category.BOT_PROBLEM, description="The Reports button in /home did nothing."
+    )
+    verdict = privacy.classify(report)
+    assert verdict.public and "about the bot" in verdict.reason
+    assert not privacy.classify(
+        a_report(category=Category.BOT_PROBLEM, description="he keeps insulting me")
+    ).public
+
+
 def test_labels_reuse_the_repos_existing_taxonomy():
     """spider-swing already has `bug`, `enhancement`, `question` and
     `type:feature`. Only the origin label is new."""
+    assert a_report(category=Category.BOT_PROBLEM).labels() == ["from-spider-bot", "bug"]
     assert a_report(category=Category.BUG).labels() == ["from-spider-bot", "bug"]
     assert "type:feature" in a_report(category=Category.IDEA).labels()
     assert "question" in a_report(category=Category.TESTING_PROBLEM).labels()
@@ -1211,7 +1493,9 @@ def test_the_publishable_forms_say_so_before_the_member_types():
     have actually told the member."""
     from spiderbot.ui import forms
 
-    for modal in (forms.FeedbackModal, forms.BugReportModal, forms.IdeaModal):
+    for modal in (
+        forms.FeedbackModal, forms.BugReportModal, forms.IdeaModal, forms.BotProblemModal,
+    ):
         placeholders = " ".join(
             str(getattr(item, "placeholder", "") or "")
             for item in modal.__dict__.values()

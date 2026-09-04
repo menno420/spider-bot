@@ -337,6 +337,14 @@ structural change - that plan outranks preferences you arrive with.
     zeroes, under a line saying it was validated against the game's committed
     schema. An absent measurement is not a measurement of zero.
 
+56. **A report's tracker is decided by its category, in one place, never by
+    its text.** `Report.target` maps `bot_problem` to `GITHUB_REPO_BOT` and
+    everything else to `GITHUB_REPO`; `IntakeService.client_for` is the only
+    reader. A report cannot steer itself onto the other tracker by what it
+    says, and a missing bot tracker refuses the bot report by name rather
+    than sending it to the game's public tracker. Owner, 2026-09-04.
+    `tests/test_intake.py::test_the_target_is_decided_by_the_category_alone`.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

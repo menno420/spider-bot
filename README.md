@@ -94,6 +94,8 @@ an extraction-ledger entry (source repo + commit + file/symbol + decision).
   (public values, future Railway variables).
 - `ANTHROPIC_API_KEY` - the AI provider.
 - `GITHUB_TOKEN` - a **fine-grained** PAT scoped to `menno420/spider-swing`
+  **and** `menno420/spider-bot` (reports about the bot go to the bot's own
+  tracker — owner, 2026-09-04; `GITHUB_REPO` / `GITHUB_REPO_BOT` name them)
   with *Issues: Read and write* and nothing else. Absent = every publish is
   refused by name and the report stays queued; nothing is lost and nothing
   pretends to have been filed. Only the account owner can mint it

@@ -74,7 +74,7 @@ class SpiderBot(commands.Bot):
         reports queued indefinitely unless someone happened to run it, and both
         surfaces said otherwise.
         """
-        if self.intake is None or not getattr(self.intake._github, "available", False):
+        if self.intake is None or not self.intake.can_publish:
             # Codex, spider-bot#3, 2026-09-04: the loop started whenever the
             # state channel existed, so with publication disabled or no token
             # every pass wrote a `publish_pending` generation and then another
@@ -206,6 +206,12 @@ class SpiderBot(commands.Bot):
             self.intake is not None, self.cfg.mod_mode,
         )
 
+    def _github_client(self, repo: str) -> github_sink.GitHubClient:
+        """A client for one repository, or a refusal that names the missing lock."""
+        return github_sink.client_for_settings(
+            self.cfg.github_token, repo, publish_enabled=self.cfg.intake_publish_enabled
+        )
+
     def _build_services(self) -> None:
         """Assemble intake and moderation from whatever is actually configured.
 
@@ -227,17 +233,14 @@ class SpiderBot(commands.Bot):
             # gained by rebuilding.
             log.debug("intake service already built; keeping it across the reconnect")
         elif intake_channel is not None:
-            client: github_sink.GitHubClient
-            if not cfg.intake_publish_enabled:
-                client = github_sink.NullGitHubClient(
-                    "INTAKE_PUBLISH_ENABLED is false"
-                )
-            elif not cfg.github_token:
-                client = github_sink.NullGitHubClient("GITHUB_TOKEN is not set")
-            else:
-                client = github_sink.HttpGitHubClient(cfg.github_token, cfg.github_repo)
+            # Two trackers, one credential, the same two locks on each: a
+            # report about the game goes to `github_repo`, a report about the
+            # bot to `github_repo_bot` (owner, 2026-09-04). Which one is the
+            # report's category's decision (`Report.target`), never the text's.
             self.intake = IntakeService(
-                store.DiscordChannelStore(intake_channel), client
+                store.DiscordChannelStore(intake_channel),
+                self._github_client(cfg.github_repo),
+                bot_github=self._github_client(cfg.github_repo_bot),
             )
         else:
             log.warning(

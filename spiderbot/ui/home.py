@@ -352,11 +352,36 @@ class HomePanel(Panel):
         reports = await service.all_reports()
         pending = await service.pending_publication()
         waiting = await service.awaiting_approval()
+        stuck = await service.stuck()
         lines = [
             f"**{len(reports)}** reports · **{len(waiting)}** waiting for you to "
-            f"publish · **{len(pending)}** approved and queued for GitHub",
+            f"publish · **{len(pending)}** approved and queued for GitHub"
+            + (f" · **{len(stuck)}** stuck" if stuck else ""),
             "",
         ]
+        if stuck:
+            # Codex, spider-bot#5: a permanent publish failure (a 404 from a
+            # tracker the token cannot see, issues disabled, a 422) left both
+            # queues, and this panel never asked `stuck()` — so the one report
+            # that needed a person was an undifferentiated line among the
+            # latest twelve, and then aged out.
+            lines.append(
+                "**Stuck — a retry can never fix these; the reason is the fix.** "
+                "Fix the cause, then `/publish <id>` tries again by hand."
+            )
+            oldest_first = sorted(stuck, key=lambda r: r.submitted_at)
+            lines += [
+                f"· {_staff_report_line(r)} — {redact.for_discord(r.publish_failure, limit=80)}"
+                for r in oldest_first[:12]
+            ]
+            if len(oldest_first) > 12:
+                # Codex, spider-bot#5 round 2: the newest six left the rest as
+                # a bare count. Oldest first, twelve, and the remainder COUNTED
+                # — not named; the twelve shown are the ones to act on first,
+                # and acting on them surfaces the next. Full pagination is
+                # deliberately not built at this server's volume.
+                lines.append(f"· … and {len(oldest_first) - 12} more, oldest shown first")
+            lines.append("")
         if waiting:
             lines.append(
                 "**Waiting for your decision** — `/publish <id>` shows you the "

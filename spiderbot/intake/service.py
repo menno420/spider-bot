@@ -45,6 +45,7 @@ from spiderbot.intake.models import (
     Reporter,
     Sensitivity,
     Status,
+    Target,
 )
 
 log = logging.getLogger("spiderbot.intake")
@@ -92,10 +93,17 @@ class IntakeService:
         backing: store.Store,
         github: github_sink.GitHubClient | None = None,
         *,
+        bot_github: github_sink.GitHubClient | None = None,
         now=time.time,
     ) -> None:
         self._store = backing
         self._github = github or github_sink.NullGitHubClient()
+        #: The tracker for reports about the bot itself (owner, 2026-09-04).
+        #: Absent means a bot report is refused BY NAME and stays queued — it
+        #: is never quietly sent to the game's tracker instead.
+        self._bot_github = bot_github or github_sink.NullGitHubClient(
+            "no GitHub client is configured for reports about the bot"
+        )
         self._now = now
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         #: report id -> the issue GitHub created when the store write that
@@ -105,6 +113,27 @@ class IntakeService:
         self._published_unrecorded: dict[str, github_sink.Published] = {}
         #: reporter user id -> the timestamps of their recent filings.
         self._recent_filings: dict[int, list[float]] = defaultdict(list)
+
+    # -- routing --------------------------------------------------------------
+
+    def client_for(self, report: Report) -> github_sink.GitHubClient:
+        """The one client this report may be projected through.
+
+        `Report.target` decides, and it decides from the category alone, so a
+        report cannot steer itself to the other tracker by what it says.
+        """
+        return self._bot_github if report.target is Target.BOT else self._github
+
+    def repo_for(self, report: Report) -> str:
+        """The repository a publish would post to, for the human who confirms."""
+        # `getattr`: the Protocol names `repo`, but a client is any object with
+        # the three publish methods, and the name is for a human's eyes only.
+        return getattr(self.client_for(report), "repo", "") or "(no repository configured)"
+
+    @property
+    def can_publish(self) -> bool:
+        """Whether ANY tracker is reachable — what a retry loop should ask."""
+        return self._github.available or self._bot_github.available
 
     # -- filing ---------------------------------------------------------------
 
@@ -220,9 +249,16 @@ class IntakeService:
         """
         base = f"Saved. Your reference is `{report.id}`."
         if report.sensitivity is Sensitivity.PUBLIC_SAFE:
+            # Codex, spider-bot#5: this said "the game's issue tracker" for a
+            # report about the bot, which goes to Spider Bot's own.
+            tracker = (
+                "Spider Bot's own issue tracker"
+                if report.target is Target.BOT
+                else "the game's issue tracker"
+            )
             return (
-                f"{base} Menno will see it, and he may put it on the game's "
-                "issue tracker so it does not get lost."
+                f"{base} Menno will see it, and he may put it on {tracker} "
+                "so it does not get lost."
             )
         return (
             f"{base} This one stays private — only Menno and the moderators "
@@ -271,7 +307,15 @@ class IntakeService:
                 sensitivity=str(report.sensitivity),
             )
             return report
-        approved = report.with_(approved_by=by)
+        # A person approving is also a person deciding to try again: a
+        # permanent failure (a 404 from a tracker the token could not see,
+        # issues disabled, a 422) is cleared by their press — they read the
+        # body and fixed the cause — while the scheduled loop never clears it.
+        # Codex, spider-bot#5: `may_publish` refused a stuck report for ever,
+        # so the panel's "the reason is the fix" had no path to act on.
+        approved = report.with_(
+            approved_by=by, publish_failure_retryable=True, publish_failure=""
+        )
         await self._store.append(store.REPORTS, approved.id, approved.as_record())
         audit.stdout_event(
             "report_approved",
@@ -344,7 +388,7 @@ class IntakeService:
             pending = report.with_(status=Status.PUBLISH_PENDING)
             await self._store.append(store.REPORTS, report.id, pending.as_record())
 
-            result = await github_sink.publish(self._github, pending)
+            result = await github_sink.publish(self.client_for(pending), pending)
             if isinstance(result, github_sink.Published):
                 final = pending.with_(
                     status=Status.PUBLISHED,
@@ -452,10 +496,32 @@ class IntakeService:
         slicing that meant a queue longer than the limit retried the same
         newest `limit` reports every pass while the oldest never moved.
         """
-        outcomes = []
+        outcomes: list[Outcome] = []
         queue = sorted(await self.pending_publication(), key=lambda r: r.submitted_at)
-        for report in queue[:limit]:
-            outcomes.append(await self.publish(report.id))
+        # One queue PER TRACKER, attempted round-robin, `limit` attempts in
+        # total. A report whose own tracker is unreachable is left queued, not
+        # attempted: an attempt writes a `publish_pending` and a
+        # `publish_failed` generation against a client that cannot become
+        # available without a redeploy, every pass, and those writes eat the
+        # store's fixed horizon (Codex, spider-bot#3 round 2 — the same hole,
+        # one tracker later). The limit counts ATTEMPTS, not queue positions
+        # (Codex, spider-bot#5 round 1: slicing first let skipped reports at
+        # the front starve every newer one), and the trackers take turns
+        # (round 2: one tracker's repeated retryable failure — the 403 the
+        # sink keeps retryable on purpose — consumed the whole pass, so the
+        # healthy tracker's newer reports were never attempted). Round-robin
+        # keeps the full limit when only one tracker has work.
+        lanes = {
+            target: [r for r in queue if r.target is target and self.client_for(r).available]
+            for target in Target
+        }
+        while len(outcomes) < limit and any(lanes.values()):
+            for target in Target:
+                if len(outcomes) >= limit:
+                    break
+                if lanes[target]:
+                    report = lanes[target].pop(0)
+                    outcomes.append(await self.publish(report.id))
         return outcomes
 
     async def stuck(self) -> list[Report]:
@@ -468,7 +534,9 @@ class IntakeService:
         return [
             r
             for r in await self.all_reports()
-            if not r.publish_failure_retryable and r.github_issue_number is None
+            if not r.publish_failure_retryable
+            and r.github_issue_number is None
+            and r.status is not Status.RESOLVED
         ]
 
     async def mark_resolved(self, report_id: str, resolution: str) -> Report | None:

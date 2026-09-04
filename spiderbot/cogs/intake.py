@@ -41,7 +41,13 @@ from discord.ext import commands
 from spiderbot import audit, evidence, ids, redact, style
 from spiderbot.intake.models import Category, Reporter
 from spiderbot.ui.base import Panel
-from spiderbot.ui.forms import BugReportModal, ComplaintModal, FeedbackModal, IdeaModal
+from spiderbot.ui.forms import (
+    BotProblemModal,
+    BugReportModal,
+    ComplaintModal,
+    FeedbackModal,
+    IdeaModal,
+)
 from spiderbot.ui.safe import safe_defer, safe_edit, safe_followup
 
 log = logging.getLogger("spiderbot.cogs.intake")
@@ -53,6 +59,57 @@ DRAFTS = "intake_drafts"
 #: only whether to OFFER, and the person decides everything after that. A false
 #: offer costs one dismissable message; a missed one costs a lost report, so
 #: the bar is set low on purpose.
+#: A problem with the bot itself, said in chat. Two patterns that must BOTH
+#: match — the subject is the bot, and something is wrong — checked before
+#: `SIGNALS`, because the first bug rule matches "doesn't work" on its own and
+#: would offer a game bug for "the Spider Bot button doesn't work". Codex,
+#: spider-bot#5: that draft, once approved, could only ever be published to the
+#: game's tracker — the cross-tracker path the routing exists to close. This
+#: still decides only what is OFFERED; the member confirms the category, and
+#: `Report.target` reads the category, never the text.
+BOT_SUBJECT = re.compile(
+    # `(?<![\w/])` rather than `\b`: a word boundary cannot precede a slash,
+    # so `\b/tester` never matched a command name at the start of a message.
+    # `[ -]?`: "spider-bot" is how people type it too. Gemini (free-key review
+    # of round 2, 2026-09-04): the hyphenated form matched neither this nor
+    # the game exclusion's lookahead, so "the spider-bot is broken" read as a
+    # game bug.
+    r"(?<![\w/])(spider[ -]?bot|the bot|bot'?s|/(?:home|report|publish|jointest|tester)|"
+    r"the panel|home panel)(?!\w)",
+    re.IGNORECASE,
+)
+BOT_TROUBLE = re.compile(
+    r"\b(does(?:n'?t| not) work|didn'?t work|isn'?t working|not working|broken|"
+    r"nothing happen(?:s|ed)|no response|not respond(?:ing)?|ignores? me|"
+    r"error|failed|timed out|stuck|crash(?:es|ed|ing)?|froze|freezes|frozen|"
+    r"hangs?|hung|glitch(?:ed|ing|es)?)\b",
+    re.IGNORECASE,
+)
+#: The game, named. Inside one clause the game outranks the bot: "the bot said
+#: the game is broken" is about the game.
+GAME_SUBJECT = re.compile(
+    r"\b(the game|the app|slingy spider|the level|the bird|the silk|the web|"
+    r"the spider(?![ -]?bot))\b",
+    re.IGNORECASE,
+)
+#: Where one thought ends and the next begins, for the purpose above. Codex,
+#: spider-bot#5 round 2: two searches over the whole message let "I asked the
+#: bot for help because the game doesn't work anymore" read as a bot problem —
+#: the subject and the trouble were in different clauses.
+CLAUSE_BREAK = re.compile(
+    r"[.!?;\n]|\b(?:because|but|although|though|while|so that)\b", re.IGNORECASE
+)
+
+
+def _reads_as_bot_problem(text: str) -> bool:
+    """A clause that names the bot, names trouble, and does not name the game."""
+    return any(
+        BOT_SUBJECT.search(clause)
+        and BOT_TROUBLE.search(clause)
+        and not GAME_SUBJECT.search(clause)
+        for clause in CLAUSE_BREAK.split(text)
+    )
+
 SIGNALS: tuple[tuple[re.Pattern[str], Category], ...] = (
     (
         re.compile(
@@ -114,6 +171,8 @@ def detect(text: str) -> Category | None:
     """The likely category, or None. Deterministic; no model call."""
     if len(text.strip()) < MIN_LENGTH:
         return None
+    if _reads_as_bot_problem(text):
+        return Category.BOT_PROBLEM
     for pattern, category in SIGNALS:
         if pattern.search(text):
             return category
@@ -398,13 +457,21 @@ def build_offer(bot, draft_id: str, category: Category, title: str, description:
     """The panel that shows what would be saved, before anything is saved."""
     from spiderbot.intake.models import CATEGORY_LABELS
 
+    # Codex, spider-bot#5 round 2: this said "the game's public issue tracker"
+    # for every category, and pressing Save it recorded consent for a
+    # destination a bot-problem reporter was never told about.
+    tracker = (
+        "Spider Bot's own public issue tracker"
+        if category is Category.BOT_PROBLEM
+        else "the game's public issue tracker"
+    )
     embed = style.embed(
         title=f"{style.SPEECH} Want me to write that down?",
         description=(
             f"I would save this as **{CATEGORY_LABELS[category]}**:\n\n"
             f"> {style.escape_name(title)}\n\n"
-            "Menno reads these, and he may put it on the game's public issue "
-            "tracker — never your name or anything private, and never until he "
+            f"Menno reads these, and he may put it on {tracker} "
+            "— never your name or anything private, and never until he "
             "presses publish himself. If I have got it wrong, press "
             "**No thanks** and use the buttons on `/home` instead."
         ),
@@ -594,6 +661,7 @@ class IntakeCog(commands.Cog):
             app_commands.Choice(name="a bug", value="bug"),
             app_commands.Choice(name="an idea", value="idea"),
             app_commands.Choice(name="how the game feels", value="gameplay_feedback"),
+            app_commands.Choice(name="a problem with Spider Bot", value="bot_problem"),
             app_commands.Choice(name="something private", value="complaint"),
         ]
     )
@@ -604,6 +672,7 @@ class IntakeCog(commands.Cog):
             "bug": BugReportModal,
             "idea": IdeaModal,
             "gameplay_feedback": FeedbackModal,
+            "bot_problem": BotProblemModal,
             "complaint": ComplaintModal,
         }[kind.value]
         await interaction.response.send_modal(modal(self.bot))
@@ -660,7 +729,7 @@ class IntakeCog(commands.Cog):
             await interaction.followup.send(
                 embed=style.embed(
                     title=(
-                        f"{style.WARN} Publish this to {self.cfg.github_repo}?"
+                        f"{style.WARN} Publish this to {service.repo_for(report)}?"
                         if number == 1
                         else f"…continued ({number} of {len(pages)})"
                     ),

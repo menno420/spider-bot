@@ -60,7 +60,8 @@ every report written in Dutch. Home → **Reports** lists what is waiting for
 that decision.
 
 **Test it with a controlled report before a member does**: file one through the
-form, confirm the issue appears on `spider-swing`, confirm the issue body
+form, confirm the issue appears on `spider-swing` (and a *problem with Spider
+Bot* on `spider-bot`), confirm the issue body
 carries the intake id and **no Discord identity**, then run `/retryreports` and
 confirm **no second issue appears**.
 
@@ -108,7 +109,10 @@ Six things, each one exact and none of which a session can do:
 
 1. **A fine-grained GitHub PAT.** Settings → Developer settings → Personal
    access tokens → Fine-grained. *Repository access* → **Only select
-   repositories** → `menno420/spider-swing`. *Repository permissions* →
+   repositories** → `menno420/spider-swing` **and `menno420/spider-bot`**
+   (the second is where a report about the bot itself goes — owner,
+   2026-09-04; a token that sees only the game repository makes every bot
+   report fail by name and stay queued). *Repository permissions* →
    **Issues: Read and write**, and nothing else. Set it as `GITHUB_TOKEN` on
    the Railway `spider-bot` worker. Only he can do this: `spider-swing` is a
    User-owned repository, so there is no organisation-approval path and no
@@ -116,7 +120,8 @@ Six things, each one exact and none of which a session can do:
    the IaC file already declares it — and every other switch in this document
    — with `preserve()`, so a later `railway config apply` keeps the dashboard
    value instead of deleting a variable the file did not name.
-2. **The label `from-spider-bot`** in `menno420/spider-swing` (any colour;
+2. **The label `from-spider-bot`** in `menno420/spider-swing` **and in
+   `menno420/spider-bot`** (any colour;
    description "Filed by Spider Bot from the Slingy Spider Discord"). Verified
    absent 2026-09-04 — the repo has thirteen labels and this is not one. If he
    would rather not have it, say so and one line comes out of
@@ -138,16 +143,20 @@ Six things, each one exact and none of which a session can do:
 
 ## What is still open, and is his to answer
 
-- **Does a public-safe report reach GitHub automatically, or only after the
-  reporter presses "yes"?** It currently ships requiring the reporter's own
-  clearance for a conversational draft, and treating an explicit form
-  submission as clearance. Both are one field.
-- **Which repository gets a report about the BOT** rather than the game?
-  `spider-swing` owns the game; "the panel button did nothing" is a spider-bot
-  issue. Everything currently goes to `spider-swing`.
-- **Should tester ideas reach `spider-swing`'s tracker at all?** It holds one
-  real issue today against 179 pull requests. A stream of bot-filed ideas
-  changes the character of that tracker, and that is a product judgement.
+- ✅ **Answered 2026-09-04 — publication consent stays as built:** a
+  conversational draft needs the reporter's own "yes"; an explicit form
+  submission (whose placeholder states the notice) counts as that consent.
+- ✅ **Answered 2026-09-04 — a report about the BOT goes to
+  `menno420/spider-bot`'s own tracker.** Built the same day: the `/report`
+  choice *a problem with Spider Bot* files a `bot_problem` report, and
+  `Report.target` routes it from the category alone — never from the text —
+  to the client for `GITHUB_REPO_BOT` (default `menno420/spider-bot`). One
+  token serves both repositories, so step 1 above now scopes it to both. With
+  no bot tracker configured a bot report is refused by name and stays queued;
+  it is never quietly sent to the game's tracker.
+- ✅ **Answered 2026-09-04 — tester ideas DO reach `spider-swing`'s tracker**,
+  labelled `from-spider-bot` + `enhancement` + `type:feature`, each still
+  needing a person's `/publish`. As built.
 - **Does `#intake-state` need splitting?** Reports, cases and conversational
   DRAFTS share one channel and one 2000-message cold-read window. Nothing older
   than that window is loaded on a restart, and an unloaded report is

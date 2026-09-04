@@ -60,6 +60,24 @@ class Category(StrEnum):
     COMPLAINT = "complaint"
     TESTING_PROBLEM = "testing_problem"
     GENERAL = "general"
+    #: A problem with Spider Bot itself — "the panel button did nothing". Owner,
+    #: 2026-09-04: these go to spider-bot's own tracker, not the game's. The
+    #: category is what routes it (`Report.target`); nothing reads the text.
+    BOT_PROBLEM = "bot_problem"
+
+
+class Target(StrEnum):
+    """Which tracker a public report is projected to.
+
+    Decided by category in exactly one place (`Report.target`) and never by
+    the text: a report that SAYS "the bot" is still about the game unless the
+    reporter filed it as a bot problem. The owner's rule, 2026-09-04: the game
+    repository gets reports about the game, spider-bot's repository gets
+    reports about the bot.
+    """
+
+    GAME = "game"
+    BOT = "bot"
 
 
 #: What each category is called when a human reads it.
@@ -70,6 +88,7 @@ CATEGORY_LABELS: dict[Category, str] = {
     Category.COMPLAINT: "Complaint",
     Category.TESTING_PROBLEM: "Testing problem",
     Category.GENERAL: "General feedback",
+    Category.BOT_PROBLEM: "Bot problem",
 }
 
 
@@ -216,6 +235,13 @@ class Report:
     resolution: str = ""
     schema_version: int = SCHEMA_VERSION
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+    # -- where it goes --------------------------------------------------------
+
+    @property
+    def target(self) -> Target:
+        """The tracker this report belongs on. Category alone decides."""
+        return Target.BOT if self.category is Category.BOT_PROBLEM else Target.GAME
 
     # -- the publication predicate ------------------------------------------
 
@@ -404,6 +430,8 @@ class Report:
             out.append("enhancement")
         elif self.category is Category.TESTING_PROBLEM:
             out.append("question")
+        elif self.category is Category.BOT_PROBLEM:
+            out.append("bug")  # spider-bot's tracker: GitHub's default `bug`
         return out
 
     # -- persistence ---------------------------------------------------------
