@@ -5,9 +5,10 @@
 > external findings answered, and the residue disclosed on the PR rather than
 > left for the reader to discover.
 >
-> **Deployment is NOT yet verified** — that is the one item this card hands
-> forward, and it is written up under *Deployment outcome* below rather than
-> claimed.
+> **Deployment VERIFIED 2026-09-04T18:43Z** — the owner merged at 18:42:14Z and
+> the new Railway deployment's `meta.commitHash` equals `main` HEAD exactly.
+> This header said "NOT yet verified" until then; the check and what it does
+> *not* cover are under *Deployment outcome* below.
 
 - **📊 Model:** opus-5 · xhigh · feature build
 - **📍 Venue:** cloud-container
@@ -98,17 +99,40 @@ round 3's. A fix moves a problem; the new place has not been looked at.
 
 ## Deployment outcome
 
-**Not verified — and deliberately not claimed.** The PR was left for the owner
-rather than merged: this bot is live in a real server, `main` deploys straight
-to production with no gate, and the four things this branch most needs are his
-decisions, not mine (two private channels, a GitHub token, and whether to point
-moderation at any channel at all).
+**VERIFIED in production, 2026-09-04T18:43Z.** The owner merged the PR at
+18:42:14Z as `5a7f8a285a095855e0450b7c237d184344d5a580`.
 
-When it merges, the check is `meta.commitHash` on the new Railway deployment
-equalling HEAD — **not** the deploy status. And note the honest complication:
-`.railway/railway.ts` sets watch patterns (`spiderbot/**`, `requirements.txt`,
-`.python-version`), and this branch touches `spiderbot/`, so it
-**will** deploy. Preserved exactly; a docs-only follow-up deliberately will not.
+| check | result |
+|---|---|
+| `meta.commitHash` on the new Railway deployment | `5a7f8a285a095855e0450b7c237d184344d5a580` — **byte-for-byte equal to `main` HEAD**, not merely `SUCCESS` |
+| the deployment it replaced | `bc4f9985` → `REMOVING`, which is also what finally confirmed `bc4f9985` was the code that had been serving |
+| the worker's own `ready` line | `ready as Spider Bot#7153 in Slingy Spider; AI=True intake=False moderation=off` |
+| command sync | `synced 12 guild commands` |
+
+**The bot says the off-state out loud, in production, rather than this card
+asserting it:** `AI=True intake=False moderation=off`. And the missing-channel
+path fired exactly as invariant 4 intends — `channels not found (features
+degrade): bot-state, case-state, intake-state`, followed by *"#intake-state not
+found: reports have nowhere durable to go, so intake stays off rather than
+accepting reports it cannot keep."*
+
+Two honest notes on that line. **`bot-state` is pre-existing, not something this
+branch broke** — `config.py:57` at `bf4d7527` already declared it, checked at
+both commits. And **`case-state`/`intake-state` missing is the shipped state, not
+a fault**: the two private channels are step 2 and step 4 of `docs/rollout.md`
+and are the owner's to create.
+
+**What is still NOT verified**, and no log line can settle it: nothing was
+exercised. No report was filed, no message judged, no model call made. Step 1's
+remaining evidence — `/home` opening, `/tester count` answering, the AI replying
+on mention — needs a person in the server. The deploy is proven; the behaviour
+is not.
+
+The watch patterns behaved as documented on the way in: `.railway/railway.ts`
+lists `spiderbot/**`, `requirements.txt`, `.python-version`, this branch touched
+33 files under `spiderbot/`, and it deployed. A docs-only follow-up — including
+this very commit — deliberately will not, so the live hash will lag HEAD from
+here, and that is correct.
 
 ## Next session
 
