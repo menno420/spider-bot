@@ -186,6 +186,28 @@ structural change - that plan outranks preferences you arrive with.
     nothing on the staff path — `/modact`'s actor must hold the permission the
     operation needs and outrank the subject, or the gate refuses.
 
+35. **Member text never renders as a MASKED link.** `[anchor](target)` is the
+    one construct where the words a reader sees and the place they go are
+    chosen separately, and this server hands out real install links.
+    `redact.for_github` and `redact.for_discord` both break it. A BARE url is
+    deliberately left alone — it tells the reader where it goes, and defanging
+    it would make honest bug reports worse.
+
+36. **A cross-repo feed is read BY KEY NAME, and its links are allow-listed.**
+    Reading a dict by insertion order makes "emit your keys in this order" the
+    contract, which JSON does not promise and no test pins. And the links block
+    is written into the chat system prompt under *"Official links (never invent
+    others)"* — so it is https-only and host-allow-listed
+    (`support.LINK_HOSTS`), because anything the model is told is official
+    should be checkable without trusting the transport or a future producer
+    edit.
+
+37. **An implausible number is clamped AND marked, aggregates included.** The
+    per-record fields were capped and banner-marked while the lifetime ledger
+    had no bounds at all. A value the file supplied that this bot cannot
+    represent counts as clamped too: replacing 1e400 with a silent `0.0` shows
+    "0 m" as though the game had measured it.
+
 ## Verify
 
 `ruff check .` + `python -m pytest` + `python -m compileall spiderbot` must

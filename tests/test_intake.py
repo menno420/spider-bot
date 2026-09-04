@@ -976,3 +976,25 @@ def test_a_channel_the_bot_cannot_post_in_does_not_become_a_write_amplifier():
 class _FakeResponseObj:
     status = 403
     reason = "Forbidden"
+
+
+def test_a_member_cannot_render_a_masked_link_in_either_destination():
+    """`MEASURED` 2026-09-04: neither escaper touched brackets or parentheses,
+    so `[official tester link](https://evil.example/apk)` typed into a bug
+    modal came out of `for_github` AND `for_discord` byte-identical — a live
+    link with attacker-chosen anchor text in a public issue and inside the
+    bot's own embed. In a server whose whole purpose is handing out real
+    install links, that is the worst thing member text can render as."""
+    evil = "the fix is [official tester link](https://evil.example/apk), try it"
+    for rendered in (redact.for_github(evil), redact.for_discord(evil)):
+        assert "](" not in rendered.replace(redact.ZERO_WIDTH, "|")
+        assert "official tester link" in rendered  # still readable, still reported
+    # Reference links and images use the same anchor/target split.
+    for form in ("[a][ref]", "![img](https://evil.example/t.png)"):
+        assert redact.ZERO_WIDTH in redact.for_github(form)
+
+    # Positive control: a BARE url is deliberately left alone — it tells the
+    # reader where it goes, and defanging it would make honest reports worse.
+    plain = "it happens on https://play.google.com/apps/testing/x every time"
+    assert redact.for_github(plain) == plain
+    assert redact.for_discord(plain) == plain

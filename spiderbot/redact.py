@@ -78,6 +78,18 @@ _INVISIBLES = re.compile(r"[​-‏‪-‮⁠-⁯﻿]")
 #: created for it. A's text never reached the tracker and both panels said it
 #: had. The break is a zero-width space, so a reader still sees the id.
 _MINTED_ID = re.compile(r"\bSB-([A-Z]{1,2})-([0-9A-Z]{4,12})-([0-9A-Z]{4,10})\b")
+#: The end of a markdown link's anchor text, immediately followed by its
+#: target: `](` for an inline link, `][` for a reference link. Broken in BOTH
+#: renderers, because a masked link is the one construct where the text a
+#: reader sees and the place it goes are decided separately — and this server
+#: hands out real install links, which makes "official tester link" pointing
+#: somewhere else the single most damaging thing member text can render as.
+#: `MEASURED` 2026-09-04: neither escaper touched brackets or parentheses, so
+#: `[official tester link](https://evil.example/apk)` typed into a bug-report
+#: modal came out of `for_github` AND `for_discord` byte-identical and rendered
+#: as a live link in a public issue and inside the bot's own embed.
+#: A BARE url is deliberately left alone: it shows a reader where it goes.
+_MASKED_LINK = re.compile(r"\](\s*[\(\[])")
 
 
 def clean(text: str, *, limit: int | None = None) -> str:
@@ -105,9 +117,13 @@ def for_discord(text: str, *, limit: int | None = None) -> str:
     Markdown is escaped so a title cannot become a heading and a description
     cannot become a quote block. `@` is defanged so no rendering of member text
     can read as the bot having pinged anyone, whatever `AllowedMentions` did.
+    And a masked link is broken: Discord renders `[text](url)` inside an embed
+    description, so without this the bot's own embed - the surface members
+    trust most - would render a member's link under a label the member chose.
     """
     escaped = _DISCORD_MARKDOWN.sub(r"\\\1", clean(text, limit=limit))
-    return _MENTION_SIGIL.sub(rf"@{ZERO_WIDTH}", escaped)
+    escaped = _MENTION_SIGIL.sub(rf"@{ZERO_WIDTH}", escaped)
+    return _MASKED_LINK.sub(rf"]{ZERO_WIDTH}\1", escaped)
 
 
 def for_github(text: str, *, limit: int | None = None) -> str:
@@ -122,9 +138,14 @@ def for_github(text: str, *, limit: int | None = None) -> str:
     code block - but an unbalanced one swallows the whole rest of the issue
     body, so a member could hide everything after their own text from the
     developer reading it. Cheap to prevent, invisible when it does not apply.
+
+    And a MASKED link is broken: `[anchor](target)` is the one construct where
+    the words a reader sees and the place they go are chosen independently. A
+    bare URL is left alone on purpose - it tells the reader where it goes.
     """
     broken = _GITHUB_SIGIL.sub(rf"\1{ZERO_WIDTH}", clean(text, limit=limit))
     broken = _MINTED_ID.sub(rf"SB{ZERO_WIDTH}-\1-\2-\3", broken)
+    broken = _MASKED_LINK.sub(rf"]{ZERO_WIDTH}\1", broken)
     return _FENCE_RUN.sub("'''", broken)
 
 

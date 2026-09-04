@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from spiderbot import audit, store, support
 from spiderbot.ai.gateway import Gateway
@@ -62,6 +62,28 @@ class SpiderBot(commands.Bot):
         # feature that cannot store anything must not pretend it can.
         self.intake: IntakeService | None = None
         self.moderation: ModerationService | None = None
+
+    @tasks.loop(minutes=5)
+    async def _support_refresh(self) -> None:
+        """Keep the game facts current while the worker runs.
+
+        `SupportFeed.refresh` has always had a correct lazy-refresh guard and,
+        until 2026-09-04, exactly one caller — `on_ready`. So
+        `SUPPORT_FEED_REFRESH_SECONDS` was dead configuration and a worker up
+        for a week served the build version it booted with, while the prompt
+        block it fed the model called them "current game facts". This loop asks
+        often; `feed.due` decides, so the interval the owner sets is the one
+        that governs the network call.
+        """
+        if self.support.due:
+            await self.support.refresh()
+
+    @_support_refresh.error
+    async def _support_refresh_failed(self, exc: BaseException) -> None:
+        # A task loop that raises stops silently, which would put the freshness
+        # back where it was without anything saying so.
+        log.exception("support feed refresh loop failed; restarting", exc_info=exc)
+        self._support_refresh.restart()
 
     def _game_knowledge(self) -> str:
         """The game facts, plus one honest line about where they came from.
@@ -127,6 +149,8 @@ class SpiderBot(commands.Bot):
             log.warning("channels not found (features degrade): %s", ", ".join(sorted(missing)))
         self._build_services()
         await self.support.refresh()
+        if not self._support_refresh.is_running():
+            self._support_refresh.start()
         audit.stdout_event(
             "ready",
             user=str(self.user),

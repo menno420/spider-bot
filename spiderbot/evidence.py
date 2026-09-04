@@ -222,7 +222,24 @@ class RunSummary:
             ]
             if self.clamped
             else []
+        ) + (
+            [
+                "Values this bot does not recognise: "
+                + ", ".join(escape(u) for u in self.unrecognised)
+                + " — shown as the file gave them."
+            ]
+            if self.unrecognised
+            else []
         )
+
+
+#: What the lifetime ledger can plausibly hold: every record at its own cap.
+#: `MEASURED` 2026-09-04, the ledger aggregates had NO bounds at all while the
+#: per-record fields were capped and banner-marked, so an edited export showing
+#: 4.6 billion km travelled rendered as a plain fact under a summary whose
+#: whole contract is that an implausible number is clamped AND marked.
+MAX_LIFETIME_PIXELS = MAX_PIXELS * MAX_RECORDS
+MAX_LIFETIME_SECONDS = MAX_SECONDS * MAX_RECORDS
 
 
 @dataclass(frozen=True)
@@ -231,8 +248,13 @@ class Lifetime:
     active_seconds: float
     travelled_pixels: float
     best_by_difficulty: dict[str, float]
+    #: Same meaning as `RunSummary.clamped`: the names of the aggregates that
+    #: held a value the game cannot produce.
+    clamped: tuple[str, ...] = ()
 
-    def lines(self) -> list[str]:
+    def lines(self, escape) -> list[str]:
+        """`escape` is required, exactly as on `RunSummary` — the difficulty
+        names in `best_by_difficulty` are keys from the pasted file."""
         out = [
             f"{self.completed_runs} recorded runs, "
             f"{self.active_seconds / 60:.0f} minutes of play, "
@@ -241,7 +263,13 @@ class Lifetime:
         for mode in ("relaxed", "standard", "harsh"):
             best = self.best_by_difficulty.get(mode)
             if best is not None:
-                out.append(f"Best on {mode}: {best / PIXELS_PER_METRE:,.0f} m")
+                out.append(f"Best on {escape(mode)}: {best / PIXELS_PER_METRE:,.0f} m")
+        if self.clamped:
+            out.append(
+                "**This file has been edited**: "
+                + ", ".join(escape(c) for c in self.clamped)
+                + " held values the game cannot produce."
+            )
         return out
 
 
@@ -272,7 +300,7 @@ class Evidence:
             lines += [f"· {line}" for line in self.latest.detail_lines(escape)]
         if self.lifetime is not None:
             lines.append("**Lifetime**")
-            lines += [f"· {line}" for line in self.lifetime.lines()]
+            lines += [f"· {line}" for line in self.lifetime.lines(escape)]
         if self.skipped_records:
             lines.append(
                 f"*{self.skipped_records} of {self.record_count + self.skipped_records} "
@@ -281,13 +309,31 @@ class Evidence:
         return lines
 
 
-def _finite(value: Any, *, default: float = 0.0) -> float:
+def _to_finite(value: Any) -> float | None:
+    """The value as a finite float, or None when it cannot be one.
+
+    `None` and a legitimate `0.0` are different answers, which is the whole
+    reason this exists beside `_finite`: a number the file supplied that this
+    module cannot represent must be MARKED, not quietly replaced by a default
+    that reads as a real measurement.
+    """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
-    number = float(value)
-    if not math.isfinite(number):
-        return default
-    return number
+        return None
+    try:
+        # A JSON integer literal larger than ~1.8e308 is a finite number, so
+        # `parse_constant` never sees it and `float()` raises OverflowError.
+        # `MEASURED` 2026-09-04: one such literal anywhere in an export aborted
+        # the WHOLE parse as "internal_error", where the module's design is
+        # that a bad record is skipped and counted in `skipped_records`.
+        number = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _finite(value: Any, *, default: float = 0.0) -> float:
+    number = _to_finite(value)
+    return default if number is None else number
 
 
 class _Bounds:
@@ -297,7 +343,14 @@ class _Bounds:
         self.clamped: list[str] = []
 
     def number(self, key: str, value: Any, *, cap: float, default: float = 0.0) -> float:
-        number = _finite(value, default=default)
+        number = _to_finite(value)
+        if number is None:
+            # Absent is not a defect; present-and-unrepresentable is. A value
+            # of 1e400 replaced by 0.0 and NOT marked would show "0 m" as
+            # though the game had measured it.
+            if value is not None:
+                self.clamped.append(key)
+            return min(max(default, 0.0), cap)
         if number < 0.0 or number > cap:
             self.clamped.append(key)
             return min(max(number, 0.0), cap)
@@ -480,17 +533,36 @@ def parse(raw: str | bytes, *, max_bytes: int = MAX_BYTES) -> Evidence:
                 if question and answer:
                     answers.append((question, answer))
 
+        # The ledger goes through the same `_Bounds` a record does, so an
+        # implausible aggregate is clamped AND marked rather than printed.
+        ledger_bounds = _Bounds()
+        bests_raw = ledger.get("best_distance_pixels_by_difficulty")
         lifetime = Lifetime(
-            completed_runs=_nonneg_int(ledger.get("total_completed_recorded_runs")),
-            active_seconds=max(0.0, _finite(ledger.get("total_active_duration_seconds"))),
-            travelled_pixels=max(0.0, _finite(ledger.get("total_distance_travelled_pixels"))),
+            completed_runs=ledger_bounds.count(
+                "total_completed_recorded_runs",
+                ledger.get("total_completed_recorded_runs"),
+                cap=MAX_RECORDS,
+            ),
+            active_seconds=ledger_bounds.number(
+                "total_active_duration_seconds",
+                ledger.get("total_active_duration_seconds"),
+                cap=MAX_LIFETIME_SECONDS,
+            ),
+            travelled_pixels=ledger_bounds.number(
+                "total_distance_travelled_pixels",
+                ledger.get("total_distance_travelled_pixels"),
+                cap=MAX_LIFETIME_PIXELS,
+            ),
             best_by_difficulty={
-                mode: max(0.0, _finite(value))
-                for mode, value in (ledger.get("best_distance_pixels_by_difficulty") or {}).items()
+                mode: ledger_bounds.number(
+                    f"best_distance_pixels[{mode}]", value, cap=MAX_PIXELS
+                )
+                for mode, value in (bests_raw or {}).items()
                 if isinstance(mode, str) and mode in DIFFICULTIES
             }
-            if isinstance(ledger.get("best_distance_pixels_by_difficulty"), dict)
+            if isinstance(bests_raw, dict)
             else {},
+            clamped=tuple(ledger_bounds.clamped),
         )
 
         return Evidence(

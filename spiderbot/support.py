@@ -161,26 +161,75 @@ BUILT_IN = SupportFacts(
 )
 
 
-def _pairs(raw: Any, limit: int = 20) -> tuple[tuple[str, str], ...]:
+def _pairs(
+    raw: Any, *, names: tuple[str, str], limit: int = 20
+) -> tuple[tuple[str, str], ...]:
+    """Label/value pairs out of a feed list, read BY KEY NAME.
+
+    `MEASURED` 2026-09-04: this used to do `keys = list(item)` and take the
+    first two by insertion order. The current producer happens to emit `label`
+    before `url`, so it rendered correctly — but the contract was silently
+    "emit your keys in this order", which JSON does not promise and no test
+    pinned. The natural shape `{"url": ..., "label": ...}` would have rendered
+    `- https://…: Official page` into the model's prompt, under a heading that
+    says these are the official links and never to invent others.
+
+    A JSON array item `["label", "value"]` is still read positionally: there
+    are no names to read there, and order IS the contract for an array.
+    """
     if not isinstance(raw, list):
         return ()
+    first, second = names
     out = []
     for item in raw[:limit]:
-        if isinstance(item, dict) and len(item) >= 2:
-            keys = list(item)
-            out.append(
-                (
-                    redact.one_line(str(item.get(keys[0], "")), limit=120),
-                    redact.one_line(str(item.get(keys[1], "")), limit=400),
-                )
-            )
+        if isinstance(item, dict):
+            if first not in item or second not in item:
+                continue  # not this shape; a guess here is what caused the bug
+            pair = (item[first], item[second])
         elif isinstance(item, (list, tuple)) and len(item) >= 2:
-            out.append(
-                (
-                    redact.one_line(str(item[0]), limit=120),
-                    redact.one_line(str(item[1]), limit=400),
-                )
+            pair = (item[0], item[1])
+        else:
+            continue
+        out.append(
+            (
+                redact.one_line(str(pair[0]), limit=120),
+                redact.one_line(str(pair[1]), limit=400),
             )
+        )
+    return tuple(out)
+
+
+#: The only hosts an "official link" may point at. The feed is fetched from a
+#: repository the owner controls, so this is not defence against him — it is
+#: defence against the block of text being written into the CHAT SYSTEM PROMPT
+#: under the heading "Official links (never invent others)". Anything the model
+#: is told is official should be checkable without trusting the transport, the
+#: CDN, or a future producer edit. Everything else is dropped, not printed.
+LINK_HOSTS: tuple[str, ...] = (
+    "play.google.com",
+    "groups.google.com",
+    "github.com",
+    "discord.gg",
+    "discord.com",
+    "youtube.com",
+    "www.youtube.com",
+)
+
+
+def _safe_links(raw: Any, limit: int = 20) -> tuple[tuple[str, str], ...]:
+    """Label/url pairs whose url is https and on `LINK_HOSTS`."""
+    from urllib.parse import urlsplit
+
+    out = []
+    for label, url in _pairs(raw, names=("label", "url"), limit=limit):
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            continue
+        if parts.scheme != "https" or parts.hostname not in LINK_HOSTS:
+            log.warning("support feed: dropped a link to %r", url[:80])
+            continue
+        out.append((label, url))
     return tuple(out)
 
 
@@ -210,7 +259,9 @@ def parse(raw: str) -> SupportFacts:
             problem=f"unexpected feed format {str(document.get('format'))[:40]!r}",
         )
     schema = document.get("schema_version")
-    if schema != SUPPORTED_SCHEMA:
+    if isinstance(schema, bool) or schema != SUPPORTED_SCHEMA:
+        # `True == 1` in Python, so a feed claiming `"schema_version": true`
+        # would otherwise pin as version 1 and be read as if understood.
         # The honest banner the contract requires: a version we do not know is
         # refused, and the bot says so, rather than reading a guessed shape.
         return SupportFacts(
@@ -232,11 +283,13 @@ def parse(raw: str) -> SupportFacts:
         testing_state=redact.one_line(str(document.get("testing_state", "")), limit=200),
         join_steps=_strings(document.get("join_steps")),
         known_issues=_strings(document.get("known_issues")),
-        troubleshooting=_pairs(document.get("troubleshooting")),
-        facts=_pairs(document.get("facts")),
+        troubleshooting=_pairs(
+            document.get("troubleshooting"), names=("symptom", "fix")
+        ),
+        facts=_pairs(document.get("facts"), names=("name", "value")),
         feedback_wanted=_strings(document.get("feedback_wanted")),
         retention_rules=_strings(document.get("retention_rules")),
-        links=_pairs(document.get("links")),
+        links=_safe_links(document.get("links")),
         generated_at=redact.one_line(str(document.get("generated_at", "")), limit=40),
         source_sha=redact.one_line(str(document.get("source_sha", "")), limit=64),
     )
@@ -259,8 +312,29 @@ class SupportFeed:
 
     @property
     def current(self) -> SupportFacts:
-        """Whatever is cached. Always a usable answer, never None."""
+        """Whatever is cached. Always a usable answer, never None.
+
+        Synchronous by contract — the AI path reads it while building a prompt
+        — so it cannot fetch. `due` below is what makes the interval real.
+        """
         return self._facts
+
+    @property
+    def due(self) -> bool:
+        """True when `refresh()` would actually go to the network.
+
+        `MEASURED` 2026-09-04: `refresh()` had a correct lazy-refresh guard and
+        exactly one caller, `bot.on_ready`. Nothing called it again, so
+        `SUPPORT_FEED_REFRESH_SECONDS` was dead configuration and a worker
+        running for a week served the build version it booted with while the
+        prompt block called them "current game facts". The caller now asks.
+        """
+        if not self._cfg.support_feed_url:
+            return False
+        return (
+            not self._facts.live
+            or self._now() - self._fetched_at >= self._cfg.support_feed_refresh_s
+        )
 
     async def refresh(self, *, force: bool = False) -> SupportFacts:
         if not self._cfg.support_feed_url:

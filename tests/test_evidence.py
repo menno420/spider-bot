@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from spiderbot import evidence, redact
+from spiderbot import evidence, redact, support
 
 TICKS = "`" * 3
 
@@ -356,3 +356,152 @@ def test_evidence_lines_do_not_double_their_bullet_in_an_issue_body():
     ).public_body()
     assert "- · Build" not in body
     assert "- Build 0.45.0" in body
+
+
+# -- what an adversarial review executed against the committed code -----------
+
+
+def test_the_lifetime_ledger_is_bounded_and_says_when_it_was_edited():
+    """`MEASURED` 2026-09-04: every per-record field was capped and marked
+    while the ledger AGGREGATES had no bounds at all, so an edited export
+    showing 4.6 billion km travelled rendered as a plain fact under a summary
+    whose whole contract is that an implausible number is clamped AND marked."""
+    result = evidence.parse(
+        export(
+            total_completed_recorded_runs=10**9,
+            total_active_duration_seconds=1e300,
+            total_distance_travelled_pixels=1e300,
+            best_distance_pixels_by_difficulty={"harsh": 1e300},
+        )
+    )
+    assert result.ok
+    assert set(result.lifetime.clamped) == {
+        "total_completed_recorded_runs",
+        "total_active_duration_seconds",
+        "total_distance_travelled_pixels",
+        "best_distance_pixels[harsh]",
+    }
+    rendered = " ".join(result.lifetime.lines(redact.for_github))
+    assert "This file has been edited" in rendered
+
+    # Positive control: an ordinary export marks nothing, so the banner means
+    # something when it appears.
+    ordinary = evidence.parse(export())
+    assert ordinary.lifetime.clamped == ()
+    assert "edited" not in " ".join(ordinary.lifetime.lines(redact.for_github))
+
+
+def test_an_unrepresentable_number_is_marked_rather_than_shown_as_zero():
+    """A JSON integer above ~1.8e308 is finite, so `parse_constant` never sees
+    it and `float()` raises OverflowError. It used to abort the WHOLE parse as
+    "internal_error"; skipping to a silent 0.0 would be worse still, because
+    "0 m" reads as a measurement."""
+    bad = dict(GOOD_RECORD, final_distance_pixels=10**400)
+    result = evidence.parse(export([GOOD_RECORD, bad]))
+    assert result.ok and result.reason == ""
+    assert result.record_count == 2
+    assert result.latest.clamped == ("final_distance_pixels",)
+    assert "This file has been edited" in " ".join(
+        result.latest.detail_lines(redact.for_github)
+    )
+
+
+def test_a_value_outside_the_catalogue_is_shown_as_unrecognised():
+    """`unrecognised` was computed on every record and rendered nowhere — so a
+    value the consumer does not understand was presented as though it did,
+    which is precisely what the module's own docstring says it must not do."""
+    odd = dict(GOOD_RECORD, difficulty_id="nightmare", terminal_outcome="ascended")
+    result = evidence.parse(export([odd]))
+    assert result.latest.unrecognised == (
+        "difficulty_id=nightmare",
+        "terminal_outcome=ascended",
+    )
+    said = [
+        line
+        for line in result.latest.detail_lines(redact.for_github)
+        if "does not recognise" in line
+    ]
+    assert said and "nightmare" in said[0]
+
+    # Positive control: a catalogued export says nothing.
+    assert not [
+        line
+        for line in evidence.parse(export()).latest.detail_lines(redact.for_github)
+        if "does not recognise" in line
+    ]
+
+
+# -- the support feed, same review -------------------------------------------
+
+
+def a_feed(**overrides) -> str:
+    body = {"format": support.FEED_FORMAT, "schema_version": support.SUPPORTED_SCHEMA}
+    body.update(overrides)
+    return json.dumps(body)
+
+
+def test_the_feeds_pairs_are_read_by_name_not_by_key_order():
+    """`MEASURED` 2026-09-04: `_pairs` did `keys = list(item)` and took the
+    first two by insertion order. Today's producer happens to emit `label`
+    before `url`, so it rendered correctly — but the contract was silently
+    "emit your keys in this order", which JSON does not promise. The natural
+    shape would have rendered `- https://…: Official page` under a heading
+    that tells the model these are the official links."""
+    facts = support.parse(
+        a_feed(
+            links=[{"url": "https://play.google.com/x", "label": "Opt-in page"}],
+            troubleshooting=[{"fix": "check the account", "symptom": "App not available"}],
+        )
+    )
+    assert facts.links == (("Opt-in page", "https://play.google.com/x"),)
+    assert facts.troubleshooting == (("App not available", "check the account"),)
+
+
+def test_an_official_link_must_be_https_and_on_a_known_host():
+    """The links block is written into the CHAT SYSTEM PROMPT under "Official
+    links (never invent others)". Anything the model is told is official should
+    be checkable without trusting the transport or a future producer edit."""
+    facts = support.parse(
+        a_feed(
+            links=[
+                {"label": "Official tester link", "url": "https://evil.example/apk"},
+                {"label": "js", "url": "javascript:alert(1)"},
+                {"label": "plain", "url": "http://play.google.com/x"},
+                {"label": "Opt-in page", "url": "https://play.google.com/apps/testing/x"},
+            ]
+        )
+    )
+    assert facts.links == (("Opt-in page", "https://play.google.com/apps/testing/x"),)
+    assert "evil.example" not in facts.as_prompt_block()
+
+
+def test_a_boolean_schema_version_is_refused():
+    """`True == 1` in Python, so a feed claiming `"schema_version": true` would
+    otherwise pin as version 1 and be read as if understood."""
+    facts = support.parse(a_feed(schema_version=True))
+    assert not facts.live
+    assert "needs updating" in facts.problem
+
+
+def test_the_refresh_interval_is_not_dead_configuration():
+    """`refresh()` had a correct lazy guard and exactly one caller, `on_ready`.
+    Nothing called it again, so `SUPPORT_FEED_REFRESH_SECONDS` governed nothing
+    and a worker up for a week served the build version it booted with."""
+    from conftest import make_cfg
+
+    clock = [1000.0]
+    cfg = make_cfg()
+    object.__setattr__(cfg, "support_feed_url", "https://example/feed.json")
+    object.__setattr__(cfg, "support_feed_refresh_s", 3600)
+    feed = support.SupportFeed(cfg, now=lambda: clock[0])
+
+    assert feed.due, "nothing fetched yet"
+    feed._facts = support.SupportFacts(source=support.Source.FEED)
+    feed._fetched_at = clock[0]
+    assert not feed.due, "just fetched"
+    clock[0] += 3600
+    assert feed.due, "the interval the owner set is the one that governs"
+
+    # Positive control: with no URL configured there is nothing to be due for.
+    object.__setattr__(cfg, "support_feed_url", "")
+    assert not support.SupportFeed(cfg, now=lambda: clock[0]).due
